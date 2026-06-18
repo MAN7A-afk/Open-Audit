@@ -263,7 +263,8 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
         if (response.latestLedger) {
           cursor = {
             lastLedger: response.latestLedger,
-            paginationCursor: response.cursor,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            paginationCursor: (response as any).cursor,
           };
           console.log(`[indexer] Cursor updated to ledger ${cursor.lastLedger}`);
         }
