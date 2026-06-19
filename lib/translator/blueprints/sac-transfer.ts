@@ -11,8 +11,9 @@
  *   data      = i128(amount)
  */
 
-import { decodeAddress, decodeAmount } from "../decode";
-import type { TranslationBlueprint, TranslationResult, RawEvent } from "../types";
+import { decodeAddress, decodeAmount, interpolateTemplate } from "../decode";
+import type { TranslationBlueprint, TranslationResult, RawEvent, Language } from "../types";
+import { getTranslation } from "../translations";
 
 /** Known SAC contract IDs mapped to their asset symbol. */
 const SAC_CONTRACTS: Record<string, string> = {
@@ -32,24 +33,23 @@ const TRANSFER_TOPIC =
  * Attempts to translate a SAC transfer event.
  * Returns null if the event does not match the transfer pattern.
  */
-function translateSacTransfer(event: RawEvent): TranslationResult | null {
+function translateSacTransfer(event: RawEvent, lang: Language): TranslationResult | null {
   if (event.topics.length < 3) return null;
   if (!event.topics[0].includes("74726e73") && event.topics[0] !== TRANSFER_TOPIC) {
     return null;
   }
 
+  const t = getTranslation(lang);
   const symbol = SAC_CONTRACTS[event.contractId] ?? "TOKEN";
   const from = decodeAddress(event.topics[1]);
   const to = decodeAddress(event.topics[2]);
   const amount = decodeAmount(event.data, symbol);
 
-  const description =
-    `Public Key [${from.short}] transferred ${amount.formatted} ${symbol} ` +
-    `to [${to.short}]`;
+  const description = t.sac.transfer(from.short, amount.formatted, symbol, to.short);
 
   return {
     description,
-    eventType: "Transfer",
+    eventType: t.sac.eventTypes.Transfer,
   };
 }
 

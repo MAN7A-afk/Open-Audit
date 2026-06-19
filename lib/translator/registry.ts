@@ -15,7 +15,14 @@
 
 import { createAllSacBlueprints } from "./blueprints/sac-transfer";
 import { createSacMintBurnBlueprint } from "./blueprints/sac-mint-burn";
-import type { RawEvent, TranslatedEvent, TranslationBlueprint } from "./types";
+import { decodeEventName } from "./decode";
+import type {
+  EventMatchCriteria,
+  RawEvent,
+  TranslatedEvent,
+  TranslationBlueprint,
+  Language,
+} from "./types";
 
 /** The registry maps contract IDs to their blueprints. */
 type BlueprintRegistry = Map<string, TranslationBlueprint>;
@@ -50,7 +57,7 @@ function buildRegistry(): BlueprintRegistry {
       const originalTranslate = existing.translate;
       registry.set(contractId, {
         ...mintBurnBlueprint,
-        translate: (event) => originalTranslate(event) ?? mintBurnBlueprint.translate(event),
+        translate: (event, lang) => originalTranslate(event, lang) ?? mintBurnBlueprint.translate(event, lang),
       });
     } else {
       registry.set(contractId, mintBurnBlueprint);
@@ -80,12 +87,13 @@ const REGISTRY: BlueprintRegistry = buildRegistry();
  */
 export function translateEvent(
   event: RawEvent,
-  customBlueprints?: Map<string, TranslationBlueprint>
+  customBlueprints?: Map<string, TranslationBlueprint>,
+  lang: Language = "en"
 ): TranslatedEvent {
   // 1. Custom (local) blueprints win when they can translate the event.
   const custom = customBlueprints?.get(event.contractId);
   if (custom) {
-    const translated = applyBlueprint(event, custom);
+    const translated = applyBlueprint(event, custom, lang);
     if (translated) return translated;
   }
 
@@ -103,7 +111,7 @@ export function translateEvent(
     };
   }
 
-  const translated = applyBlueprint(event, blueprint);
+  const translated = applyBlueprint(event, blueprint, lang);
   if (translated) return translated;
 
   return {
@@ -119,8 +127,10 @@ export function translateEvent(
  * Runs a single blueprint against an event, returning a translated event or
  * null when the blueprint cannot handle it.
  */
-function applyBlueprint(event: RawEvent, blueprint: TranslationBlueprint): TranslatedEvent | null {
-  const result = blueprint.translate(event);
+function applyBlueprint(event: RawEvent, blueprint: TranslationBlueprint, lang: Language): TranslatedEvent | null {
+  if (blueprint.matches && !blueprint.matches(event)) return null;
+
+  const result = blueprint.translate(event, lang);
   if (!result) return null;
 
   return {
@@ -133,6 +143,44 @@ function applyBlueprint(event: RawEvent, blueprint: TranslationBlueprint): Trans
 }
 
 /**
+ * Returns true when an event satisfies every requested criterion.
+ * Useful for blueprints that must match more than the event signature topic.
+ */
+export function matchesEventCriteria(
+  event: RawEvent,
+  criteria: EventMatchCriteria
+): boolean {
+  if (criteria.contractId && event.contractId !== criteria.contractId) {
+    return false;
+  }
+
+  for (const topicCriteria of criteria.topics ?? []) {
+    const topic = event.topics[topicCriteria.index];
+    if (typeof topic !== "string") return false;
+
+    if (topicCriteria.equals && topic !== topicCriteria.equals) {
+      return false;
+    }
+
+    if (
+      topicCriteria.includes &&
+      !topic.toLowerCase().includes(topicCriteria.includes.toLowerCase())
+    ) {
+      return false;
+    }
+
+    if (
+      topicCriteria.decodedName &&
+      decodeEventName(topic) !== topicCriteria.decodedName
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Translates a batch of raw events.
  * Preserves order and handles errors per-event gracefully.
  *
@@ -141,11 +189,12 @@ function applyBlueprint(event: RawEvent, blueprint: TranslationBlueprint): Trans
  */
 export function translateEvents(
   events: RawEvent[],
-  customBlueprints?: Map<string, TranslationBlueprint>
+  customBlueprints?: Map<string, TranslationBlueprint>,
+  lang: Language = "en"
 ): TranslatedEvent[] {
   return events.map(function (event: RawEvent): TranslatedEvent {
     try {
-      return translateEvent(event, customBlueprints);
+      return translateEvent(event, customBlueprints, lang);
     } catch {
       return {
         raw: event,

@@ -12,6 +12,7 @@
 
 import { startEventIndexer } from "./indexer";
 import { getNetworkConfig } from "./client";
+import { eventResponseToRawEvent } from "./events";
 import { translateEvents } from "@/lib/translator/registry";
 import type { SorobanRpc } from "stellar-sdk";
 import type { RawEvent, TranslatedEvent } from "@/lib/translator/types";
@@ -118,7 +119,7 @@ export function startMonitoringContract(
 
       // Convert Stellar SDK events to RawEvents
       const rawEvents = events.map(function (event) {
-        return convertToRawEvent(event, contractId);
+        return eventResponseToRawEvent(event, contractId);
       });
 
       // Translate the events

@@ -37,6 +37,9 @@ export function Header(): React.JSX.Element {
               <a href="/dashboard">Dashboard</a>
             </Button>
             <Button variant="ghost" size="sm" asChild>
+              <a href="/developer/sandbox">Sandbox</a>
+            </Button>
+            <Button variant="ghost" size="sm" asChild>
               <a
                 href="https://github.com/your-org/open-audit"
                 target="_blank"
@@ -79,6 +82,11 @@ export function Header(): React.JSX.Element {
             <Button variant="ghost" size="sm" className="w-full justify-start" asChild>
               <a href="/dashboard" onClick={toggleMobileMenu}>
                 Dashboard
+              </a>
+            </Button>
+            <Button variant="ghost" size="sm" className="w-full justify-start" asChild>
+              <a href="/developer/sandbox" onClick={toggleMobileMenu}>
+                Sandbox
               </a>
             </Button>
             <Button variant="ghost" size="sm" className="w-full justify-start" asChild>

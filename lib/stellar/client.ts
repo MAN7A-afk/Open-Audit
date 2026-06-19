@@ -8,6 +8,9 @@
  * with real Stellar SDK calls to connect to the live network.
  */
 
+import { eventResponseToRawEvent } from "./events";
+import type { RawEvent } from "../translator/types";
+
 /** Stellar network configuration. */
 export interface StellarNetworkConfig {
   horizonUrl: string;
@@ -47,16 +50,16 @@ export function getNetworkConfig(): StellarNetworkConfig {
  * handling, use the indexer module (./indexer.ts) which implements
  * exponential backoff retry logic.
  *
- * @param contractId - The contract ID to fetch events for
+ * @param contractIds - Single contract ID or array of contract IDs to fetch events for
  * @param config - Network configuration
  * @param startLedger - Optional starting ledger (defaults to 1000 ledgers ago)
  * @returns Array of contract events
  */
 export async function fetchContractEvents(
-  contractId: string,
+  contractIds: string | string[],
   config: StellarNetworkConfig = TESTNET_CONFIG,
   startLedger?: number
-): Promise<unknown[]> {
+): Promise<RawEvent[]> {
   try {
     // Dynamically import stellar-sdk to avoid bundling issues
     const { SorobanRpc } = await import("stellar-sdk");
@@ -70,18 +73,24 @@ export async function fetchContractEvents(
       ledgerToFetch = Math.max(1, latestLedger.sequence - 1000);
     }
 
+    const ids = Array.isArray(contractIds) ? contractIds : [contractIds];
+
     console.log(
-      `[open-audit] Fetching events for ${contractId} from ${config.sorobanRpcUrl} starting at ledger ${ledgerToFetch}`
+      `[open-audit] Fetching events for ${ids.length} contract(s) from ${config.sorobanRpcUrl} starting at ledger ${ledgerToFetch}`
     );
 
     const result = await server.getEvents({
       startLedger: ledgerToFetch,
-      filters: [{ type: "contract", contractIds: [contractId] }],
+      filters: [{ type: "contract", contractIds: ids }],
     });
 
     console.log(`[open-audit] Fetched ${result.events?.length || 0} events`);
 
-    return result.events || [];
+    return (result.events || []).map(function (event) {
+      const fallbackContractId =
+        typeof ids[0] === "string" && ids.length === 1 ? ids[0] : undefined;
+      return eventResponseToRawEvent(event, fallbackContractId);
+    });
   } catch (error) {
     console.error("[open-audit] Error fetching contract events:", error);
     throw error;
