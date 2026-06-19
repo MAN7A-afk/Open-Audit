@@ -16,7 +16,7 @@
  * so custom translations render in the same style as registry translations.
  */
 
-import { decodeAddress, decodeAmount, decodeEventName, truncateHex } from "./decode";
+import { decodeAddress, decodeAmount, decodeEventName, truncateHex, escapeHtml } from "./decode";
 import type {
   CustomAbi,
   CustomAbiEvent,
@@ -284,9 +284,11 @@ function firstArray(...candidates: unknown[]): unknown[] {
 }
 
 function asciiToHex(text: string): string {
+  // Escape HTML entities before converting to hex to prevent XSS
+  const sanitizedText = escapeHtml(text);
   let hex = "";
-  for (let i = 0; i < text.length; i++) {
-    hex += text.charCodeAt(i).toString(16).padStart(2, "0");
+  for (let i = 0; i < sanitizedText.length; i++) {
+    hex += sanitizedText.charCodeAt(i).toString(16).padStart(2, "0");
   }
   return hex;
 }

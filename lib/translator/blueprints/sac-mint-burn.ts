@@ -13,7 +13,7 @@
  *   data      = i128(amount)
  */
 
-import { decodeAddress, decodeAmount } from "../decode";
+import { decodeAddress, decodeAmount, interpolateTemplate } from "../decode";
 import type { TranslationBlueprint, TranslationResult, RawEvent } from "../types";
 
 const KNOWN_SYMBOLS: Record<string, string> = {
@@ -35,9 +35,10 @@ function translateMint(event: RawEvent): TranslationResult | null {
   const amount = decodeAmount(event.data, symbol);
 
   return {
-    description:
-      `Admin [${admin.short}] minted ${amount.formatted} ${symbol} ` +
-      `to [${to.short}]`,
+    description: interpolateTemplate(
+      "Admin [{admin}] minted {amount} {symbol} to [{to}]",
+      { admin: admin.short, to: to.short, amount: amount.formatted, symbol }
+    ),
     eventType: "Mint",
   };
 }
@@ -53,7 +54,10 @@ function translateBurn(event: RawEvent): TranslationResult | null {
   const amount = decodeAmount(event.data, symbol);
 
   return {
-    description: `Public Key [${from.short}] burned ${amount.formatted} ${symbol}`,
+    description: interpolateTemplate(
+      "Public Key [{from}] burned {amount} {symbol}",
+      { from: from.short, amount: amount.formatted, symbol }
+    ),
     eventType: "Burn",
   };
 }

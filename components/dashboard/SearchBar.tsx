@@ -10,6 +10,8 @@ interface SearchBarProps {
   defaultValue?: string;
   topicFilter: string;
   onTopicFilterChange: (value: string) => void;
+  value?: string;
+  onValueChange?: (value: string) => void;
 }
 
 const EXAMPLE_CONTRACTS = [
@@ -33,6 +35,18 @@ export function SearchBar({
 }: SearchBarProps): React.JSX.Element {
   const [value, setValue] = useState(defaultValue);
   const [validationError, setValidationError] = useState<string | null>(null);
+  value: controlledValue,
+  onValueChange,
+}: SearchBarProps): React.JSX.Element {
+  const [internalValue, setInternalValue] = useState(defaultValue);
+  const value = controlledValue ?? internalValue;
+
+  function updateValue(nextValue: string): void {
+    if (controlledValue === undefined) {
+      setInternalValue(nextValue);
+    }
+    onValueChange?.(nextValue);
+  }
 
   function handleSubmit(e: FormEvent<HTMLFormElement>): void {
     e.preventDefault();
@@ -50,12 +64,14 @@ export function SearchBar({
   function handleClear(): void {
     setValue("");
     setValidationError(null);
+    updateValue("");
     onSearch("");
   }
 
   function handleExampleClick(contractId: string): void {
     setValue(contractId);
     setValidationError(null);
+    updateValue(contractId);
     onSearch(contractId);
   }
 
@@ -123,6 +139,7 @@ export function SearchBar({
             value={topicFilter}
             onChange={function (e) {
               onTopicFilterChange(e.target.value);
+              updateValue(e.target.value);
             }}
             placeholder="Filter by event type (e.g. Transfer, Mint, Burn)"
             className="pl-9 pr-9 font-mono text-sm"

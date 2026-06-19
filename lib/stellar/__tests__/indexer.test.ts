@@ -2,6 +2,8 @@
  * Tests for the Stellar Event Indexer with rate limit handling.
  */
 
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
+import { SorobanRpc } from "stellar-sdk";
 import {
   fetchEventsWithRetry,
   startEventIndexer,
@@ -10,11 +12,13 @@ import {
   type IndexerCursor,
 } from "../indexer";
 
+const jest = vi;
+
 // Mock stellar-sdk
-jest.mock("stellar-sdk", function () {
+vi.mock("stellar-sdk", function () {
   return {
     SorobanRpc: {
-      Server: jest.fn(),
+      Server: vi.fn(),
     },
   };
 });
@@ -148,9 +152,8 @@ describe("startEventIndexer", function () {
     };
 
     // Mock the SorobanRpc.Server constructor
-    const { SorobanRpc } = require("stellar-sdk");
-    SorobanRpc.Server.mockImplementation(function () {
-      return mockServer;
+    vi.mocked(SorobanRpc.Server).mockImplementation(function () {
+      return mockServer as any;
     });
   });
 

@@ -18,6 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -26,3 +28,5 @@ jobs:
       - run: npm ci
 
       - run: npx ts-node scripts/validate-registry.ts
+      - run: npm ci
+      - run: node scripts/validate-registry.js

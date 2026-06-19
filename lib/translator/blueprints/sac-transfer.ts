@@ -11,7 +11,7 @@
  *   data      = i128(amount)
  */
 
-import { decodeAddress, decodeAmount } from "../decode";
+import { decodeAddress, decodeAmount, interpolateTemplate } from "../decode";
 import type { TranslationBlueprint, TranslationResult, RawEvent } from "../types";
 
 /** Known SAC contract IDs mapped to their asset symbol. */
@@ -43,9 +43,10 @@ function translateSacTransfer(event: RawEvent): TranslationResult | null {
   const to = decodeAddress(event.topics[2]);
   const amount = decodeAmount(event.data, symbol);
 
-  const description =
-    `Public Key [${from.short}] transferred ${amount.formatted} ${symbol} ` +
-    `to [${to.short}]`;
+  const description = interpolateTemplate(
+    "Public Key [{from}] transferred {amount} {symbol} to [{to}]",
+    { from: from.short, to: to.short, amount: amount.formatted, symbol }
+  );
 
   return {
     description,
