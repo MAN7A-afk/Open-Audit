@@ -15,17 +15,78 @@
 
 import { createAllSacBlueprints } from "./blueprints/sac-transfer";
 import { createSacMintBurnBlueprint } from "./blueprints/sac-mint-burn";
-import { decodeEventName } from "./decode";
+import { decodeEventName, decodeAddress, decodeAmount } from "./decode";
 import type {
   EventMatchCriteria,
   RawEvent,
   TranslatedEvent,
   TranslationBlueprint,
   Language,
+  ContractSchema,
+  ContractRegistryEntry,
+  TranslationResult,
 } from "./types";
 
-/** The registry maps contract IDs to their blueprints. */
-type BlueprintRegistry = Map<string, TranslationBlueprint>;
+/** The registry maps contract IDs to their versioned entries. */
+type BlueprintRegistry = Map<string, ContractRegistryEntry>;
+
+/** Cache for resolved schemas to avoid repeated scans of the registry. */
+const RESOLUTION_CACHE: Map<string, ContractSchema> = new Map();
+
+/**
+ * Interpolates a template string with values from an object.
+ * e.g. "Hello {name}" + { name: "World" } -> "Hello World"
+ */
+function interpolate(template: string, values: Record<string, any>): string {
+  return template.replace(/\{([^}]+)\}/g, (match, key) => {
+    const [path, format] = key.split(".");
+    const val = values[path];
+    if (val && typeof val === "object" && format) {
+      return val[format] ?? match;
+    }
+    return val ?? match;
+  });
+}
+
+/**
+ * Creates a translation function from a declarative event mapping.
+ */
+function createTranslateFromMapping(mapping: any): (event: RawEvent, lang: Language) => TranslationResult | null {
+  return (event: RawEvent) => {
+    // 1. Match topics
+    if (event.topics.length < mapping.topics.length) return null;
+    for (let i = 0; i < mapping.topics.length; i++) {
+      if (i === 0) {
+        if (decodeEventName(event.topics[0]) !== mapping.topics[0]) return null;
+      }
+      // Future: support matching other topics too
+    }
+
+    const fields: Record<string, any> = {};
+
+    // 2. Extract topics[1..]
+    mapping.event_structure.topics.forEach((t: any, i: number) => {
+      const hex = event.topics[i + 1];
+      if (!hex) return;
+      if (t.type === "address") fields[t.name] = decodeAddress(hex);
+      else if (t.type === "i128") fields[t.name] = decodeAmount(hex);
+      else fields[t.name] = hex;
+    });
+
+    // 3. Extract data
+    if (mapping.event_structure.data) {
+      const d = mapping.event_structure.data;
+      if (d.type === "i128") fields[d.name] = decodeAmount(event.data);
+      else if (d.type === "address") fields[d.name] = decodeAddress(event.data);
+      else fields[d.name] = event.data;
+    }
+
+    return {
+      description: interpolate(mapping.english_template, fields),
+      eventType: mapping.topics[0],
+    };
+  };
+}
 
 /**
  * Builds the global blueprint registry by collecting all known blueprints.
@@ -34,15 +95,36 @@ type BlueprintRegistry = Map<string, TranslationBlueprint>;
 function buildRegistry(): BlueprintRegistry {
   const registry: BlueprintRegistry = new Map();
 
-  // Stellar Asset Contract — Transfer events
-  // Note: These must come AFTER mint/burn to take precedence (Map overwrites)
-  // Or we need a unified blueprint that handles all SAC event types
-  for (const blueprint of createAllSacBlueprints()) {
-    registry.set(blueprint.contractId, blueprint);
+  /** Helper to add or merge a blueprint into the registry with versioning. */
+  function register(blueprint: TranslationBlueprint, version = "1.0.0", fromLedger = 0) {
+    let entry = registry.get(blueprint.contractId);
+    if (!entry) {
+      entry = {
+        contractId: blueprint.contractId,
+        contractName: blueprint.contractName,
+        schemas: [],
+      };
+      registry.set(blueprint.contractId, entry);
+    }
+
+    entry.schemas.push({
+      version,
+      validFromLedger: fromLedger,
+      validToLedger: null,
+      blueprint,
+    });
+
+    entry.schemas.sort((a, b) => a.validFromLedger - b.validFromLedger);
+    for (let i = 0; i < entry.schemas.length - 1; i++) {
+      entry.schemas[i].validToLedger = entry.schemas[i + 1].validFromLedger - 1;
+    }
   }
 
-  // Stellar Asset Contract — Mint/Burn events
-  // Register mint/burn handlers - they check event type internally
+  // 1. Load Hardcoded Blueprints
+  for (const blueprint of createAllSacBlueprints()) {
+    register(blueprint);
+  }
+
   const mintBurnContracts = [
     "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
     "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
@@ -52,73 +134,140 @@ function buildRegistry(): BlueprintRegistry {
   for (const contractId of mintBurnContracts) {
     const mintBurnBlueprint = createSacMintBurnBlueprint(contractId);
     const existing = registry.get(contractId);
-    if (existing) {
-      // Merge by creating a combined translate function
-      const originalTranslate = existing.translate;
-      registry.set(contractId, {
-        ...mintBurnBlueprint,
+    if (existing && existing.schemas.length > 0) {
+      const latestSchema = existing.schemas[existing.schemas.length - 1];
+      const originalTranslate = latestSchema.blueprint.translate;
+      latestSchema.blueprint = {
+        ...latestSchema.blueprint,
         translate: (event, lang) => originalTranslate(event, lang) ?? mintBurnBlueprint.translate(event, lang),
-      });
+      };
     } else {
-      registry.set(contractId, mintBurnBlueprint);
+      register(mintBurnBlueprint);
     }
   }
 
-  // TODO: Add Soroswap Router blueprint (see good-first-issues.json GFI-003)
-  // TODO: Add Blend Protocol blueprint
-  // TODO: Add Phoenix DEX blueprint
-
   return registry;
+}
+
+/**
+ * Dynamically registers a new schema for a contract.
+ * Useful for handling contract upgrades (update_current_contract_wasm) at runtime.
+ */
+export function registerUpgrade(
+  contractId: string,
+  version: string,
+  fromLedger: number,
+  eventMappings: any[]
+) {
+  const entry = REGISTRY.get(contractId);
+  if (!entry) return;
+
+  const blueprint: TranslationBlueprint = {
+    contractId,
+    contractName: entry.contractName,
+    translate: (event, lang) => {
+      for (const mapping of eventMappings) {
+        const result = createTranslateFromMapping(mapping)(event, lang);
+        if (result) return result;
+      }
+      return null;
+    },
+  };
+
+  entry.schemas.push({
+    version,
+    validFromLedger: fromLedger,
+    validToLedger: null,
+    blueprint,
+  });
+
+  entry.schemas.sort((a, b) => a.validFromLedger - b.validFromLedger);
+  for (let i = 0; i < entry.schemas.length - 1; i++) {
+    entry.schemas[i].validToLedger = entry.schemas[i + 1].validFromLedger - 1;
+  }
+
+  // Clear cache for this contract to force re-resolution
+  RESOLUTION_CACHE.forEach((_, key) => {
+    if (key.startsWith(`${contractId}:`)) {
+      RESOLUTION_CACHE.delete(key);
+    }
+  });
 }
 
 /** Singleton registry instance. */
 const REGISTRY: BlueprintRegistry = buildRegistry();
 
 /**
+ * Resolves the correct schema version for a given contract and ledger.
+ */
+function resolveSchema(
+  contractId: string,
+  ledger: number,
+  customBlueprints?: Map<string, TranslationBlueprint>
+): ContractSchema | null {
+  // 1. Check Custom (local) blueprints first. 
+  // Custom blueprints are currently not versioned in this implementation, 
+  // but we treat them as "always valid" for the current session.
+  const custom = customBlueprints?.get(contractId);
+  if (custom) {
+    return {
+      version: "custom",
+      validFromLedger: 0,
+      validToLedger: null,
+      blueprint: custom,
+    };
+  }
+
+  // 2. Check cache
+  const cacheKey = `${contractId}:${ledger}`;
+  const cached = RESOLUTION_CACHE.get(cacheKey);
+  if (cached) return cached;
+
+  // 3. Look up in global registry
+  const entry = REGISTRY.get(contractId);
+  if (!entry) return null;
+
+  // 4. Find matching ledger window
+  const schema = entry.schemas.find(
+    (s) => ledger >= s.validFromLedger && (s.validToLedger === null || ledger <= s.validToLedger)
+  );
+
+  if (schema) {
+    RESOLUTION_CACHE.set(cacheKey, schema);
+    return schema;
+  }
+
+  return null;
+}
+
+/**
  * Translates a single raw Soroban event into a human-readable TranslatedEvent.
- *
- * Lookup order:
- *   1. The caller-supplied `customBlueprints` map (e.g. user-uploaded ABIs from
- *      localStorage). These take precedence so developers can translate their
- *      own contracts before they are merged into the global registry.
- *   2. The global REGISTRY of community blueprints.
- *
- * If neither produces a translation, the event is marked as "cryptic".
  */
 export function translateEvent(
   event: RawEvent,
   customBlueprints?: Map<string, TranslationBlueprint>,
   lang: Language = "en"
 ): TranslatedEvent {
-  // 1. Custom (local) blueprints win when they can translate the event.
-  const custom = customBlueprints?.get(event.contractId);
-  if (custom) {
-    const translated = applyBlueprint(event, custom, lang);
-    if (translated) return translated;
-  }
+  const schema = resolveSchema(event.contractId, event.ledger, customBlueprints);
 
-  // 2. Fall back to the global community registry.
-  const blueprint = REGISTRY.get(event.contractId);
-
-  if (!blueprint) {
+  if (!schema) {
     return {
       raw: event,
       description: null,
       status: "cryptic",
-      // Surface the custom contract name (if any) so the UI still has context.
-      blueprintName: custom?.contractName ?? null,
+      blueprintName: null,
       eventType: null,
     };
   }
 
-  const translated = applyBlueprint(event, blueprint, lang);
+  const translated = applyBlueprint(event, schema.blueprint, lang);
   if (translated) return translated;
 
   return {
     raw: event,
     description: null,
     status: "cryptic",
-    blueprintName: blueprint.contractName,
+    blueprintName: schema.blueprint.contractName,
     eventType: null,
   };
 }

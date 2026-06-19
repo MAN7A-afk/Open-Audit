@@ -1,116 +1,94 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/grant-fox/Open-Audit/lib/translator/registry.schema.json",
-  "title": "Open-Audit Translation Registry Entry",
-  "description": "Schema for a single translation registry entry.",
-  "type": "object",
-  "required": ["contract_id", "topics", "event_structure", "english_template"],
-  "properties": {
-    "contract_id": {
-      "type": "string",
-      "description": "The Soroban contract address this entry applies to"
-    },
-    "topics": {
-      "type": "array",
-      "description": "Ordered list of event topic names (the first is the event discriminant)",
-      "minItems": 1,
-      "items": {
-        "type": "string"
-      }
-    },
-    "event_structure": {
-      "type": "object",
-      "description": "Describes how the raw event's topics and data map to named, typed fields",
-      "required": ["topics"],
-      "properties": {
-        "topics": {
-          "type": "array",
-          "description": "Fields extracted from event topics[1..] (topic[0] is the event name)",
-          "items": {
-            "type": "object",
-            "required": ["name", "type"],
-            "properties": {
-              "name": {
-                "type": "string",
-                "description": "The field name used in the english_template"
-              },
-              "type": {
-                "type": "string",
-                "description": "The Soroban type (address, i128, u32, symbol, bool, bytes)"
-              }
-            }
-          }
-        },
-        "data": {
-          "type": "object",
-          "description": "The field extracted from the event data payload (if any)",
-          "required": ["name", "type"],
-          "properties": {
-            "name": {
-              "type": "string",
-              "description": "The field name used in the english_template"
-            },
-            "type": {
-              "type": "string",
-              "description": "The Soroban type (address, i128, u32, symbol, bool, bytes)"
-            }
-          }
-        }
-      }
-    },
-    "english_template": {
-      "type": "string",
-      "description": "Human-readable template describing the event, using {field} placeholders"
   "title": "Open-Audit Translation Registry",
-  "description": "Schema for the Open-Audit translation registry mapping. Validates an array of registry entries submitted via community PRs.",
+  "description": "Schema for the Open-Audit translation registry mapping. Supports multiple versions per contract with ledger ranges.",
   "type": "array",
   "minItems": 1,
   "items": {
-    "$ref": "#/$defs/registryEntry"
+    "type": "object",
+    "required": ["contract_id", "contract_name", "schemas"],
+    "additionalProperties": false,
+    "properties": {
+      "contract_id": {
+        "type": "string",
+        "description": "The Soroban contract address",
+        "minLength": 1
+      },
+      "contract_name": {
+        "type": "string",
+        "description": "Human-readable name for the contract"
+      },
+      "schemas": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "$ref": "#/$defs/versionedSchema"
+        }
+      }
+    }
   },
   "uniqueItems": true,
   "$defs": {
-    "registryEntry": {
+    "versionedSchema": {
       "type": "object",
-      "required": ["contract_id", "topics", "event_structure", "english_template"],
+      "required": ["version", "valid_from_ledger", "event_mappings"],
       "additionalProperties": false,
       "properties": {
-        "contract_id": {
+        "version": {
           "type": "string",
-          "description": "The Soroban contract address this entry applies to",
-          "minLength": 1
+          "description": "Semantic version of this schema"
         },
+        "valid_from_ledger": {
+          "type": "integer",
+          "description": "The ledger sequence this schema becomes valid from",
+          "minimum": 0
+        },
+        "valid_to_ledger": {
+          "type": ["integer", "null"],
+          "description": "The ledger sequence this schema is valid until (inclusive). Null means current.",
+          "minimum": 0
+        },
+        "event_mappings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/eventMapping"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Optional metadata about this version"
+        }
+      }
+    },
+    "eventMapping": {
+      "type": "object",
+      "required": ["topics", "event_structure", "english_template"],
+      "additionalProperties": false,
+      "properties": {
         "topics": {
           "type": "array",
           "description": "Ordered list of event topic names (the first is the event discriminant)",
           "minItems": 1,
           "items": {
-            "type": "string",
-            "minLength": 1
+            "type": "string"
           }
         },
         "event_structure": {
           "type": "object",
           "description": "Describes how the raw event's topics and data map to named, typed fields",
           "required": ["topics"],
-          "additionalProperties": false,
           "properties": {
             "topics": {
               "type": "array",
-              "description": "Fields extracted from event topics[1..] (topic[0] is the event name)",
               "items": {
                 "type": "object",
                 "required": ["name", "type"],
-                "additionalProperties": false,
                 "properties": {
-                  "name": {
-                    "type": "string",
-                    "description": "The field name used in the english_template",
-                    "minLength": 1
-                  },
+                  "name": { "type": "string" },
                   "type": {
                     "type": "string",
-                    "description": "The Soroban type (address, i128, u32, symbol, bool, bytes)",
                     "enum": ["address", "i128", "u32", "u64", "i64", "symbol", "bool", "bytes"]
                   }
                 }
@@ -118,18 +96,11 @@
             },
             "data": {
               "type": "object",
-              "description": "The field extracted from the event data payload (if any)",
               "required": ["name", "type"],
-              "additionalProperties": false,
               "properties": {
-                "name": {
-                  "type": "string",
-                  "description": "The field name used in the english_template",
-                  "minLength": 1
-                },
+                "name": { "type": "string" },
                 "type": {
                   "type": "string",
-                  "description": "The Soroban type (address, i128, u32, symbol, bool, bytes)",
                   "enum": ["address", "i128", "u32", "u64", "i64", "symbol", "bool", "bytes"]
                 }
               }
@@ -138,8 +109,7 @@
         },
         "english_template": {
           "type": "string",
-          "description": "Human-readable template describing the event, using {field} placeholders",
-          "minLength": 1
+          "description": "Human-readable template describing the event, using {field} placeholders"
         }
       }
     }

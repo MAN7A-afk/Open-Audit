@@ -1,208 +1,44 @@
 [
   {
     "contract_id": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-    "topics": ["transfer"],
-    "topics": ["transfer", "from", "to"],
-    "event_structure": {
-      "topics": [
-        { "name": "from", "type": "address" },
-        { "name": "to", "type": "address" }
-      ],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Public Key [{from.short}] transferred {amount.formatted} USDC to [{to.short}]"
-  },
-  {
-    "contract_id": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
-    "topics": ["transfer"],
-    "english_template": "Public Key [{from}] transferred {amount} to [{to}]"
-  },
-  {
-    "contract_id": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
-    "topics": ["transfer", "from", "to"],
-    "event_structure": {
-      "topics": [
-        { "name": "from", "type": "address" },
-        { "name": "to", "type": "address" }
-      ],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Public Key [{from.short}] transferred {amount.formatted} XLM to [{to.short}]"
-  },
-  {
-    "contract_id": "CAZAQB3D7KSLSNOSQKYD2V4JP5V2Y3B4RDJZRLBFCCIXDCTE3WHSY3UE",
-    "topics": ["transfer"],
-    "english_template": "Public Key [{from}] transferred {amount} to [{to}]"
-  },
-  {
-    "contract_id": "CAZAQB3D7KSLSNOSQKYD2V4JP5V2Y3B4RDJZRLBFCCIXDCTE3WHSY3UE",
-    "topics": ["transfer", "from", "to"],
-    "event_structure": {
-      "topics": [
-        { "name": "from", "type": "address" },
-        { "name": "to", "type": "address" }
-      ],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Public Key [{from.short}] transferred {amount.formatted} EURC to [{to.short}]"
-  },
-  {
-    "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-    "topics": ["transfer", "mint", "burn"],
-    "english_template": "Public Key [{from}] transferred {amount} to [{to}]"
-  },
-  {
-    "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-    "topics": ["transfer", "from", "to"],
-    "event_structure": {
-      "topics": [
-        { "name": "from", "type": "address" },
-        { "name": "to", "type": "address" }
-      ],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Public Key [{from.short}] transferred {amount.formatted} USDC to [{to.short}]"
-  },
-  {
-    "contract_id": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-    "topics": ["transfer", "mint", "burn"],
-    "english_template": "Public Key [{from}] transferred {amount} to [{to}]"
-  },
-  {
-    "contract_id": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-    "topics": ["transfer", "from", "to"],
-    "event_structure": {
-      "topics": [
-        { "name": "from", "type": "address" },
-        { "name": "to", "type": "address" }
-      ],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Public Key [{from.short}] transferred {amount.formatted} XLM to [{to.short}]"
-  },
-  {
-    "contract_id": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-    "topics": ["mint"],
-    "english_template": "Public Key [{from}] transferred {amount} to [{to}]"
-  },
-  {
-    "contract_id": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-    "topics": ["mint", "admin", "to"],
-    "event_structure": {
-      "topics": [
-        { "name": "admin", "type": "address" },
-        { "name": "to", "type": "address" }
-      ],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Admin [{admin.short}] minted {amount.formatted} USDC to [{to.short}]"
-  },
-  {
-    "contract_id": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
-    "topics": ["mint"],
-    "english_template": "Admin [{admin}] minted {amount} to [{to}]"
-  },
-  {
-    "contract_id": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
-    "topics": ["mint", "admin", "to"],
-    "event_structure": {
-      "topics": [
-        { "name": "admin", "type": "address" },
-        { "name": "to", "type": "address" }
-      ],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Admin [{admin.short}] minted {amount.formatted} XLM to [{to.short}]"
-  },
-  {
-    "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-    "topics": ["mint"],
-    "english_template": "Admin [{admin}] minted {amount} to [{to}]"
-  },
-  {
-    "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-    "topics": ["mint", "admin", "to"],
-    "event_structure": {
-      "topics": [
-        { "name": "admin", "type": "address" },
-        { "name": "to", "type": "address" }
-      ],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Admin [{admin.short}] minted {amount.formatted} USDC to [{to.short}]"
-  },
-  {
-    "contract_id": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-    "topics": ["mint"],
-    "english_template": "Admin [{admin}] minted {amount} to [{to}]"
-  },
-  {
-    "contract_id": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-    "topics": ["mint", "admin", "to"],
-    "event_structure": {
-      "topics": [
-        { "name": "admin", "type": "address" },
-        { "name": "to", "type": "address" }
-      ],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Admin [{admin.short}] minted {amount.formatted} XLM to [{to.short}]"
-  },
-  {
-    "contract_id": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-    "topics": ["burn"],
-    "english_template": "Admin [{admin}] minted {amount} to [{to}]"
-  },
-  {
-    "contract_id": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-    "topics": ["burn", "from"],
-    "event_structure": {
-      "topics": [{ "name": "from", "type": "address" }],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Public Key [{from.short}] burned {amount.formatted} USDC"
-  },
-  {
-    "contract_id": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
-    "topics": ["burn"],
-    "english_template": "Public Key [{from}] burned {amount}"
-  },
-  {
-    "contract_id": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
-    "topics": ["burn", "from"],
-    "event_structure": {
-      "topics": [{ "name": "from", "type": "address" }],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Public Key [{from.short}] burned {amount.formatted} XLM"
-  },
-  {
-    "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-    "topics": ["burn"],
-    "english_template": "Public Key [{from}] burned {amount}"
-  },
-  {
-    "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-    "topics": ["burn", "from"],
-    "event_structure": {
-      "topics": [{ "name": "from", "type": "address" }],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Public Key [{from.short}] burned {amount.formatted} USDC"
-  },
-  {
-    "contract_id": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-    "topics": ["burn"],
-    "english_template": "Public Key [{from}] burned {amount}"
-  },
-  {
-    "contract_id": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-    "topics": ["burn", "from"],
-    "event_structure": {
-      "topics": [{ "name": "from", "type": "address" }],
-      "data": { "name": "amount", "type": "i128" }
-    },
-    "english_template": "Public Key [{from.short}] burned {amount.formatted} XLM"
-    "english_template": "Public Key [{from}] burned {amount}"
+    "contract_name": "USDC Token",
+    "schemas": [
+      {
+        "version": "1.0.0",
+        "valid_from_ledger": 100,
+        "valid_to_ledger": 500,
+        "event_mappings": [
+          {
+            "topics": ["transfer"],
+            "event_structure": {
+              "topics": [
+                { "name": "from", "type": "address" },
+                { "name": "to", "type": "address" }
+              ],
+              "data": { "name": "amount", "type": "i128" }
+            },
+            "english_template": "v1: [{from.short}] sent {amount.formatted} USDC to [{to.short}]"
+          }
+        ]
+      },
+      {
+        "version": "2.0.0",
+        "valid_from_ledger": 501,
+        "valid_to_ledger": null,
+        "event_mappings": [
+          {
+            "topics": ["transfer"],
+            "event_structure": {
+              "topics": [
+                { "name": "from", "type": "address" },
+                { "name": "to", "type": "address" }
+              ],
+              "data": { "name": "amount", "type": "i128" }
+            },
+            "english_template": "v2: [{from.short}] transferred {amount.formatted} USDC to [{to.short}]"
+          }
+        ]
+      }
+    ]
   }
 ]
