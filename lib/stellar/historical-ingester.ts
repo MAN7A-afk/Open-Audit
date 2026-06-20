@@ -6,6 +6,8 @@
  */
 
 import { SorobanRpc } from "stellar-sdk";
+import { isOpenAuditError, normalizeError } from "../errors";
+import { captureExceptionSync } from "../telemetry";
 import type { StellarNetworkConfig } from "./client";
 import { fetchEventsWithRetry, DEFAULT_RETRY_CONFIG, type IndexerRetryConfig } from "./indexer";
 
@@ -51,6 +53,8 @@ export interface HistoricalIngestionOptions extends HistoricalIngestionConfig {
   onComplete?: OnComplete;
   /** Callback for errors. */
   onError?: OnError;
+  /** If true, continue to next chunk when a chunk fails after retries (default: false). */
+  continueOnFailure?: boolean;
 }
 
 /** Default chunk size (1000 ledgers per request). */
@@ -153,6 +157,7 @@ export async function ingestHistoricalRange(
         server,
         [contractId],
         chunkStart,
+        chunkEnd,
         retryConfig,
         networkConfig.sorobanRpcUrl
       );
@@ -178,16 +183,33 @@ export async function ingestHistoricalRange(
         `[historical-ingester] Chunk ${chunkIndex + 1}/${totalChunks}: fetched ${events.length} events`
       );
     } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
+      const err = isOpenAuditError(error)
+        ? error
+        : normalizeError(error, "Historical ingestion chunk failed", {
+            contractId,
+            ledgerSequence: chunkStart,
+            chunkIndex,
+            operation: "ingestHistoricalRange",
+          });
 
-      // Invoke error callback
+      captureExceptionSync(err, {
+        context: { contractId, ledgerSequence: chunkStart, chunkIndex },
+      });
+
       if (onError) {
         onError(err, chunkIndex);
       } else {
         console.error(`[historical-ingester] Error in chunk ${chunkIndex}: ${err.message}`);
       }
 
-      // Stop processing on error
+      // Stop or continue based on configuration
+      if (options.continueOnFailure) {
+        console.warn(
+          `[historical-ingester] Skipping chunk ${chunkIndex} due to error and continuing as requested.`
+        );
+        continue;
+      }
+
       throw err;
     }
   }

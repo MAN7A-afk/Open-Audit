@@ -83,7 +83,7 @@ export function EventFeedTable({
   return (
     <>
       <div className="rounded-lg border bg-card overflow-hidden">
-        <Table>
+        <Table aria-label="Contract event feed">
           <TableHeader>
             <TableRow className="bg-muted/30 hover:bg-muted/30">
               <TableHead className="w-[130px]">Status</TableHead>
@@ -154,6 +154,7 @@ export function EventFeedTable({
                             variant="ghost"
                             size="sm"
                             className="h-8 px-2 text-xs"
+                            aria-label={`View raw data for event ${event.raw.id}`}
                             onClick={function () {
                               handleViewRaw(event.raw);
                             }}
@@ -167,6 +168,7 @@ export function EventFeedTable({
                               variant="outline"
                               size="sm"
                               className="h-8 px-2 text-xs border-violet-200 text-violet-700 hover:bg-violet-50 hover:text-violet-800 dark:border-violet-800 dark:text-violet-400 dark:hover:bg-violet-950"
+                              aria-label={`Contribute a translation for event ${event.raw.id}`}
                               onClick={function () {
                                 handleContribute(event.raw);
                               }}

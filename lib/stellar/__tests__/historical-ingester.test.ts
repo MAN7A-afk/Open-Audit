@@ -1,24 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { SorobanRpc } from "stellar-sdk";
 import { ingestHistoricalRange, DEFAULT_CHUNK_SIZE } from "../historical-ingester";
 import { TESTNET_CONFIG } from "../client";
 
 // Mock the Soroban RPC
 vi.mock("stellar-sdk", () => ({
   SorobanRpc: {
-    Server: vi.fn().mockImplementation(() => ({
-      getEvents: vi.fn().mockResolvedValue({
-        events: [
-          { id: "1", type: "contract", ledger: 1000, createdAt: "2024-01-01T00:00:00Z" },
-          { id: "2", type: "contract", ledger: 1001, createdAt: "2024-01-01T00:01:00Z" },
-        ],
-      }),
-    })),
+    Server: vi.fn().mockImplementation(function () {
+      return {
+        getEvents: vi.fn().mockResolvedValue({
+          events: [
+            { id: "1", type: "contract", ledger: 1000, createdAt: "2024-01-01T00:00:00Z" },
+            { id: "2", type: "contract", ledger: 1001, createdAt: "2024-01-01T00:01:00Z" },
+          ],
+        }),
+      };
+    }),
   },
 }));
 
 describe("Historical Ingester", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.mocked(SorobanRpc.Server).mockClear();
   });
 
   it("should validate required parameters", async () => {

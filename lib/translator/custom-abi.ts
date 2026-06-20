@@ -17,6 +17,7 @@
  */
 
 import { decodeAddress, decodeAmount, decodeEventName, truncateHex } from "./decode";
+import { RegistryTemplateException } from "../errors";
 import type {
   CustomAbi,
   CustomAbiEvent,
@@ -62,13 +63,17 @@ export function parseCustomAbi(input: unknown, fallbackContractId?: string): Cus
     (fallbackContractId ? fallbackContractId.trim() : null);
 
   if (!contractId) {
-    throw new Error("A Contract ID is required to associate this ABI with a contract.");
+    throw new RegistryTemplateException(
+      "A Contract ID is required to associate this ABI with a contract.",
+      { operation: "parseCustomAbi" }
+    );
   }
 
   const eventRecords = collectEventRecords(input);
   if (eventRecords.length === 0) {
-    throw new Error(
-      "No event definitions were found. Expected an `events` array or a contract spec with event entries."
+    throw new RegistryTemplateException(
+      "No event definitions were found. Expected an `events` array or a contract spec with event entries.",
+      { contractId, operation: "parseCustomAbi" }
     );
   }
 

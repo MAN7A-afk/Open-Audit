@@ -11,7 +11,7 @@
  *   data      = i128(amount)
  */
 
-import { decodeAddress, decodeAmount, interpolateTemplate } from "../decode";
+import { decodeAddress, decodeAmount, interpolateTemplate } from "../core";
 import type { TranslationBlueprint, TranslationResult, RawEvent, Language } from "../types";
 import { getTranslation } from "../translations";
 

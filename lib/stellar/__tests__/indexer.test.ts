@@ -11,6 +11,7 @@ import {
   DEFAULT_RETRY_CONFIG,
   type IndexerCursor,
 } from "../indexer";
+import { StellarNetworkException } from "../../errors";
 
 const jest = vi;
 
@@ -65,6 +66,7 @@ describe("fetchEventsWithRetry", function () {
       mockServer as unknown as SorobanRpc.Server,
       ["contract-1"],
       1000,
+      undefined,
       DEFAULT_RETRY_CONFIG
     );
 
@@ -92,6 +94,7 @@ describe("fetchEventsWithRetry", function () {
       mockServer as unknown as SorobanRpc.Server,
       ["contract-1"],
       1000,
+      undefined,
       {
         initialDelayMs: 10, // Short delays for tests
         maxDelayMs: 100,
@@ -104,17 +107,18 @@ describe("fetchEventsWithRetry", function () {
     expect(mockServer.getEvents).toHaveBeenCalledTimes(3);
   });
 
-  it("should throw immediately on non-rate-limit errors", async function () {
-    mockServer.getEvents.mockRejectedValue(new Error("Network connection failed"));
+  it("should throw immediately on non-retriable errors", async function () {
+    mockServer.getEvents.mockRejectedValue(new Error("Invalid filter parameter"));
 
     await expect(
       fetchEventsWithRetry(
         mockServer as unknown as SorobanRpc.Server,
         ["contract-1"],
         1000,
+        undefined,
         DEFAULT_RETRY_CONFIG
       )
-    ).rejects.toThrow("Network connection failed");
+    ).rejects.toBeInstanceOf(StellarNetworkException);
 
     expect(mockServer.getEvents).toHaveBeenCalledTimes(1);
   });
@@ -127,6 +131,7 @@ describe("fetchEventsWithRetry", function () {
         mockServer as unknown as SorobanRpc.Server,
         ["contract-1"],
         1000,
+        undefined,
         {
           initialDelayMs: 10,
           maxDelayMs: 100,
@@ -134,7 +139,7 @@ describe("fetchEventsWithRetry", function () {
           backoffMultiplier: 2,
         }
       )
-    ).rejects.toThrow("Failed to fetch events after 2 retries");
+    ).rejects.toThrow(/Failed to fetch events after 2 retries/);
 
     expect(mockServer.getEvents).toHaveBeenCalledTimes(3); // Initial + 2 retries
   });

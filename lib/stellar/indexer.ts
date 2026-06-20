@@ -13,6 +13,9 @@ import {
   setCachedEvents,
   isRedisEnabled,
 } from "../cache/redisCache";
+import { StellarNetworkException, XdrParsingException } from "../errors";
+import { captureExceptionSync } from "../telemetry";
+import { createIngestionPool, DEFAULT_WORKER_COUNT, type IngestionPoolMetrics } from "./ingestion-pool";
 import type { StellarNetworkConfig } from "./client";
 import type { RawEvent } from "../translator/types";
 
@@ -32,7 +35,7 @@ export interface IndexerRetryConfig {
 export const DEFAULT_RETRY_CONFIG: IndexerRetryConfig = {
   initialDelayMs: 1000, // Start with 1 second
   maxDelayMs: 32000, // Cap at 32 seconds
-  maxRetries: 10,
+  maxRetries: 5,
   backoffMultiplier: 2, // Double the delay each time
 };
 
@@ -77,16 +80,33 @@ export function calculateRetryDelay(
 /**
  * Checks if an error is an HTTP 429 (Too Many Requests) error.
  */
-function isRateLimitError(error: unknown): boolean {
+export function isRetriableError(error: unknown): boolean {
   if (error instanceof Error) {
-    // Check for common patterns in stellar-sdk errors
     const message = error.message.toLowerCase();
-    return (
+
+    // Common retriable patterns: 429, rate limit, timeouts, and network errors
+    if (
       message.includes("429") ||
       message.includes("too many requests") ||
-      message.includes("rate limit")
-    );
+      message.includes("rate limit") ||
+      message.includes("timeout") ||
+      message.includes("timed out") ||
+      message.includes("econnreset") ||
+      message.includes("etimedout") ||
+      message.includes("econnrefused") ||
+      message.includes("enotfound") ||
+      message.includes("network")
+    ) {
+      return true;
+    }
   }
+
+  // Some libraries attach HTTP status codes to the error object
+  const anyErr = error as any;
+  if (anyErr && (anyErr.status >= 500 || anyErr.response?.status >= 500)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -108,6 +128,7 @@ export async function fetchEventsWithRetry(
   server: SorobanRpc.Server,
   contractIds: string[],
   startLedger: number,
+  endLedger?: number,
   retryConfig: IndexerRetryConfig = DEFAULT_RETRY_CONFIG,
   sorobanRpcUrl?: string
 ): Promise<SorobanRpc.Api.GetEventsResponse> {
@@ -145,18 +166,29 @@ export async function fetchEventsWithRetry(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
-      // Check if this is a rate limit error
-      const isRateLimit = isRateLimitError(error);
+      // Check if this is a retriable error (rate limit, network, timeouts, 5xx)
+      const isRetriable = isRetriableError(error);
 
-      // If it's not a rate limit error, throw immediately
-      if (!isRateLimit) {
-        throw lastError;
+      // If it's not retriable, throw immediately
+      if (!isRetriable) {
+        throw new StellarNetworkException(lastError.message, {
+          contractId: contractIds[0],
+          ledgerSequence: startLedger,
+          operation: "fetchEventsWithRetry",
+        }, { cause: lastError, retriable: false });
       }
 
       // If we've exhausted all retries, throw
       if (attempt >= retryConfig.maxRetries) {
-        throw new Error(
-          `Failed to fetch events after ${retryConfig.maxRetries} retries due to rate limiting: ${lastError.message}`
+        const ledgerRange = endLedger ? `${startLedger}-${endLedger}` : `${startLedger}`;
+        throw new StellarNetworkException(
+          `Failed to fetch events after ${retryConfig.maxRetries} retries (ledgers ${ledgerRange}): ${lastError.message}`,
+          {
+            contractId: contractIds[0],
+            ledgerSequence: startLedger,
+            operation: "fetchEventsWithRetry",
+          },
+          { cause: lastError, retriable: true }
         );
       }
 
@@ -164,7 +196,7 @@ export async function fetchEventsWithRetry(
       const delayMs = calculateRetryDelay(attempt, retryConfig);
 
       console.warn(
-        `[indexer] Rate limit hit (429). Retrying in ${delayMs}ms (attempt ${attempt + 1}/${retryConfig.maxRetries})...`
+        `[indexer] Retriable error hit. Retrying in ${delayMs}ms (attempt ${attempt + 1}/${retryConfig.maxRetries})...`
       );
 
       // Wait before retrying
@@ -270,6 +302,7 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
           server,
           contractIds,
           cursor.lastLedger,
+          undefined,
           retryConfig,
           networkConfig.sorobanRpcUrl
         );
@@ -286,7 +319,7 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
         if (response.latestLedger) {
           cursor = {
             lastLedger: response.latestLedger,
-
+            paginationCursor: (response as unknown as Record<string, unknown>).cursor as string | undefined,
           };
           console.log(`[indexer] Cursor updated to ledger ${cursor.lastLedger}`);
         }
@@ -294,19 +327,30 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
         // Wait before next poll
         await sleep(pollIntervalMs);
       } catch (error) {
-        const err = error instanceof Error ? error : new Error(String(error));
+        const willRetry = isRetriableError(error);
+        const err =
+          error instanceof StellarNetworkException
+            ? error
+            : new StellarNetworkException(
+                error instanceof Error ? error.message : String(error),
+                {
+                  contractId: contractIds[0],
+                  ledgerSequence: cursor.lastLedger,
+                  operation: "pollEvents",
+                },
+                { cause: error, retriable: willRetry }
+              );
 
-        // Check if we'll retry
-        const willRetry = isRateLimitError(error);
+        captureExceptionSync(err, {
+          context: { contractId: contractIds[0], ledgerSequence: cursor.lastLedger },
+        });
 
-        // Notify error handler
         if (onError) {
           onError(err, willRetry);
         } else {
           console.error(`[indexer] Error: ${err.message}`);
         }
 
-        // If it's not a rate limit error, wait before retrying
         if (!willRetry) {
           await sleep(pollIntervalMs);
         }
@@ -345,6 +389,49 @@ export interface StreamingIndexerOptions {
   onEvent: (event: RawEvent) => void | Promise<void>;
   /** Callback for handling errors. */
   onError?: (error: Error) => void;
+  /**
+   * Size of the parallel consumer fleet that performs the CPU-heavy work
+   * (XDR body decoding + the `onEvent` handler). Defaults to
+   * {@link DEFAULT_WORKER_COUNT}. Set to 1 for fully sequential processing.
+   */
+  workerCount?: number;
+  /**
+   * Maximum number of in-flight events before the producer applies backpressure
+   * to the stream. Omit for an unbounded buffer.
+   */
+  maxQueueSize?: number;
+}
+
+/**
+ * A lightweight envelope produced for each contract event. The producer fills
+ * in only the contract ID (cheap, needed for partition routing); the consumer
+ * performs the expensive topic/data XDR decoding when it builds the RawEvent.
+ */
+interface StreamEventEnvelope {
+  event: xdr.ContractEvent;
+  contractId: string;
+  txId: string;
+  txHash: string;
+  ledger: number;
+  eventIndex: number;
+}
+
+/** Decodes a queued envelope into Open-Audit's RawEvent shape (consumer side). */
+function envelopeToRawEvent(envelope: StreamEventEnvelope): RawEvent {
+  const { event, contractId, txId, txHash, ledger, eventIndex } = envelope;
+  return {
+    id: `${txId}-${eventIndex}`,
+    contractId,
+    topics: event
+      .body()
+      .v0()
+      .topics()
+      .map((topic) => `0x${topic.toXDR("hex")}`),
+    data: `0x${event.body().v0().data().toXDR("hex")}`,
+    ledger,
+    timestamp: Math.floor(Date.now() / 1000), // Horizon tx doesn't expose close time in the stream.
+    txHash,
+  };
 }
 
 /**
@@ -352,26 +439,68 @@ export interface StreamingIndexerOptions {
  *
  * This function establishes a persistent SSE connection to Horizon and decodes
  * Soroban events from transaction metadata in real-time.
+ *
+ * Architecture: Producer / Consumer
+ * ─────────────────────────────────
+ * The stream callback (Producer) does the minimum work needed to fan events out
+ * — extract each contract event and its contract ID — then writes them into a
+ * {@link createIngestionPool partitioned channel}. A configurable fleet of
+ * consumers drains the channel in parallel, performing the heavy XDR body
+ * decoding and invoking `onEvent` (translation / persistence / broadcast).
+ *
+ * Because events are partitioned by contract ID, all events from one contract
+ * are processed in arrival order by a single consumer (strict per-contract
+ * ordering), while events from different contracts are processed in parallel —
+ * so a ledger carrying thousands of events no longer stalls the stream.
  */
 export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): {
   stop: () => void;
+  getMetrics: () => IngestionPoolMetrics;
 } {
-  const { networkConfig, contractIds, onEvent, onError } = options;
+  const { networkConfig, contractIds, onEvent, onError, workerCount, maxQueueSize } = options;
   const server = new Horizon.Server(networkConfig.horizonUrl);
 
   let isRunning = true;
   let closeStream: (() => void) | null = null;
 
+  // The consumer fleet: each worker decodes a queued event and runs onEvent.
+  const pool = createIngestionPool<StreamEventEnvelope>({
+    workerCount: workerCount ?? DEFAULT_WORKER_COUNT,
+    maxQueueSize,
+    // Partition by contract ID to keep per-contract ordering strictly FIFO.
+    partitionKey: (envelope) => envelope.contractId,
+    process: async (envelope) => {
+      await onEvent(envelopeToRawEvent(envelope));
+    },
+    onError: (err, item) => {
+      const xdrError = new XdrParsingException(
+        err.message,
+        {
+          contractId: item.contractId,
+          ledgerSequence: item.ledger,
+          txHash: item.txHash,
+          operation: "envelopeToRawEvent",
+        },
+        err
+      );
+      captureExceptionSync(xdrError);
+      if (onError) onError(xdrError);
+    },
+  });
+
   async function startStream() {
     if (!isRunning) return;
 
-    console.log("[streaming-indexer] Starting Horizon transaction stream...");
+    console.log(
+      `[streaming-indexer] Starting Horizon transaction stream (${workerCount ?? DEFAULT_WORKER_COUNT} consumers)...`
+    );
 
     try {
       closeStream = server
         .transactions()
         .cursor("now")
         .stream({
+          // Producer: parse the envelope, route events, return fast.
           onmessage: async (tx: any) => {
             if (!tx.result_meta_xdr) return;
 
@@ -387,7 +516,8 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
                 events = meta.v4().sorobanMeta().events();
               }
 
-              for (const event of events) {
+              for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
+                const event = events[eventIndex];
                 const contractId = event.contractId()
                   ? StrKey.encodeContract(event.contractId())
                   : "unknown";
@@ -397,30 +527,39 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
                   continue;
                 }
 
-                // Convert to RawEvent format
-                const rawEvent: RawEvent = {
-                  id: `${tx.id}-${events.indexOf(event)}`,
+                // Hand off to the consumer fleet (backpressure-aware).
+                await pool.enqueue({
+                  event,
                   contractId,
-                  topics: event
-                    .body()
-                    .v0()
-                    .topics()
-                    .map((topic) => `0x${topic.toXDR("hex")}`),
-                  data: `0x${event.body().v0().data().toXDR("hex")}`,
-                  ledger: tx.ledger_attr,
-                  timestamp: Math.floor(Date.now() / 1000), // Horizon tx doesn't have easy timestamp in stream?
+                  txId: tx.id,
                   txHash: tx.hash,
-                };
-
-                await onEvent(rawEvent);
+                  ledger: tx.ledger_attr,
+                  eventIndex,
+                });
               }
             } catch (err) {
-              console.error("[streaming-indexer] Error decoding transaction meta:", err);
+              const xdrError = new XdrParsingException(
+                err instanceof Error ? err.message : "Failed to decode transaction meta",
+                {
+                  ledgerSequence: tx.ledger_attr,
+                  txHash: tx.hash,
+                  xdrHex: tx.result_meta_xdr,
+                  operation: "decodeTransactionMeta",
+                },
+                err
+              );
+              captureExceptionSync(xdrError);
+              if (onError) onError(xdrError);
             }
           },
           onerror: (err) => {
-            console.error("[streaming-indexer] Stream error:", err);
-            if (onError) onError(new Error(String(err)));
+            const networkError = new StellarNetworkException(
+              String(err),
+              { operation: "horizonStream" },
+              { retriable: true, cause: err }
+            );
+            captureExceptionSync(networkError);
+            if (onError) onError(networkError);
 
             // Auto-reconnect logic
             if (isRunning) {
@@ -430,7 +569,13 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
           },
         });
     } catch (err) {
-      console.error("[streaming-indexer] Failed to start stream:", err);
+      const networkError = new StellarNetworkException(
+        err instanceof Error ? err.message : "Failed to start Horizon stream",
+        { operation: "startHorizonStream" },
+        { retriable: true, cause: err }
+      );
+      captureExceptionSync(networkError);
+      if (onError) onError(networkError);
       if (isRunning) {
         setTimeout(startStream, 5000);
       }
@@ -445,7 +590,10 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
       if (closeStream) {
         closeStream();
       }
+      // Drain in-flight events, then stop the consumer fleet.
+      void pool.stop();
       console.log("[streaming-indexer] Stopped");
     },
+    getMetrics: () => pool.metrics(),
   };
 }

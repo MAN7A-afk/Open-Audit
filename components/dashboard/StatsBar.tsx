@@ -18,8 +18,8 @@ interface StatCardProps {
 function StatCard({ icon, label, value, sublabel }: StatCardProps): React.JSX.Element {
   return (
     <Card>
-      <CardContent className="p-4 flex items-center gap-3">
-        <div className="flex-shrink-0 text-muted-foreground">{icon}</div>
+      <CardContent className="p-4 flex items-center gap-3" role="figure" aria-label={`${label}: ${value}`}>
+        <div className="flex-shrink-0 text-muted-foreground" aria-hidden="true">{icon}</div>
         <div>
           <p className="text-2xl font-semibold leading-none">{value}</p>
           <p className="text-xs text-muted-foreground mt-1">{label}</p>

@@ -11,7 +11,7 @@ describe("client integration with MSW", () => {
 
     expect(events).toBeDefined();
     expect(events.length).toBe(1);
-    expect((events[0] as any).contractId.contractId()).toBe(contractId);
-    expect((events[0] as any).type).toBe("contract");
+    expect(events[0].ledger).toBe(123456);
+    expect(events[0].topics).toHaveLength(3);
   });
 });
