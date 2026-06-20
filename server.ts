@@ -13,6 +13,7 @@ import { MOCK_RAW_EVENTS } from "./lib/mock-data";
 import { translateEvent } from "./lib/translator/registry";
 import { startHorizonStreamingIndexer } from "./lib/stellar/indexer";
 import { getNetworkConfig } from "./lib/stellar/client";
+import { eventsIngestedTotal, metricsHandler, recordTranslationDuration, startTelemetry } from "./lib/telemetry";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT ?? "3000", 10);
@@ -20,8 +21,14 @@ const port = parseInt(process.env.PORT ?? "3000", 10);
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
-app.prepare().then(() => {
+app.prepare().then(async () => {
+  await startTelemetry();
   const httpServer = createServer((req, res) => {
+    if (req.url === "/metrics") {
+      void metricsHandler(res);
+      return;
+    }
+
     res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://* https://horizon-testnet.stellar.org https://soroban-testnet.stellar.org https://horizon.stellar.org https://mainnet.stellar.validationcloud.io; img-src 'self' data:; font-src 'self' data:;");
     const parsedUrl = parse(req.url ?? "/", true);
     handle(req, res, parsedUrl);
@@ -47,9 +54,10 @@ app.prepare().then(() => {
   // Start the real-time streaming indexer
   const indexer = startHorizonStreamingIndexer({
     networkConfig: getNetworkConfig(),
-    onEvent: (rawEvent) => {
+    onEvent: async (rawEvent) => {
       console.log(`[Indexer] New event: ${rawEvent.id} from contract ${rawEvent.contractId}`);
-      const translated = translateEvent(rawEvent);
+      const translated = recordTranslationDuration(rawEvent.contractId, () => translateEvent(rawEvent));
+      eventsIngestedTotal.labels(rawEvent.contractId, translated.status === "translated" ? "success" : "failed").inc();
       broadcast(translated);
     },
     onError: (err) => {

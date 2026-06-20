@@ -8,6 +8,7 @@
 import { SorobanRpc } from "stellar-sdk";
 import type { StellarNetworkConfig } from "./client";
 import { fetchEventsWithRetry, DEFAULT_RETRY_CONFIG, type IndexerRetryConfig } from "./indexer";
+import { eventsIngestedTotal } from "../telemetry";
 
 /** Configuration for historical ingestion. */
 export interface HistoricalIngestionConfig {
@@ -159,6 +160,7 @@ export async function ingestHistoricalRange(
 
       const events = response.events || [];
       totalEvents += events.length;
+      eventsIngestedTotal.labels(contractId, "success").inc(events.length);
 
       // Create chunk result
       const chunkResult: ChunkResult = {
@@ -179,6 +181,7 @@ export async function ingestHistoricalRange(
       );
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
+      eventsIngestedTotal.labels(contractId, "failed").inc();
 
       // Invoke error callback
       if (onError) {
