@@ -26,7 +26,7 @@ export interface IndexerRetryConfig {
 export const DEFAULT_RETRY_CONFIG: IndexerRetryConfig = {
   initialDelayMs: 1000, // Start with 1 second
   maxDelayMs: 32000, // Cap at 32 seconds
-  maxRetries: 10,
+  maxRetries: 5,
   backoffMultiplier: 2, // Double the delay each time
 };
 
@@ -71,16 +71,33 @@ export function calculateRetryDelay(
 /**
  * Checks if an error is an HTTP 429 (Too Many Requests) error.
  */
-function isRateLimitError(error: unknown): boolean {
+function isRetriableError(error: unknown): boolean {
   if (error instanceof Error) {
-    // Check for common patterns in stellar-sdk errors
     const message = error.message.toLowerCase();
-    return (
+
+    // Common retriable patterns: 429, rate limit, timeouts, and network errors
+    if (
       message.includes("429") ||
       message.includes("too many requests") ||
-      message.includes("rate limit")
-    );
+      message.includes("rate limit") ||
+      message.includes("timeout") ||
+      message.includes("timed out") ||
+      message.includes("econnreset") ||
+      message.includes("etimedout") ||
+      message.includes("econnrefused") ||
+      message.includes("enotfound") ||
+      message.includes("network")
+    ) {
+      return true;
+    }
   }
+
+  // Some libraries attach HTTP status codes to the error object
+  const anyErr = error as any;
+  if (anyErr && (anyErr.status >= 500 || anyErr.response?.status >= 500)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -102,6 +119,7 @@ export async function fetchEventsWithRetry(
   server: SorobanRpc.Server,
   contractIds: string[],
   startLedger: number,
+  endLedger?: number,
   retryConfig: IndexerRetryConfig = DEFAULT_RETRY_CONFIG
 ): Promise<SorobanRpc.Api.GetEventsResponse> {
   let lastError: Error | null = null;
@@ -124,18 +142,19 @@ export async function fetchEventsWithRetry(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
-      // Check if this is a rate limit error
-      const isRateLimit = isRateLimitError(error);
+      // Check if this is a retriable error (rate limit, network, timeouts, 5xx)
+      const isRetriable = isRetriableError(error);
 
-      // If it's not a rate limit error, throw immediately
-      if (!isRateLimit) {
+      // If it's not retriable, throw immediately
+      if (!isRetriable) {
         throw lastError;
       }
 
       // If we've exhausted all retries, throw
       if (attempt >= retryConfig.maxRetries) {
+        const ledgerRange = endLedger ? `${startLedger}-${endLedger}` : `${startLedger}`;
         throw new Error(
-          `Failed to fetch events after ${retryConfig.maxRetries} retries due to rate limiting: ${lastError.message}`
+          `Failed to fetch events after ${retryConfig.maxRetries} retries (ledgers ${ledgerRange}): ${lastError.message}`
         );
       }
 
@@ -143,7 +162,7 @@ export async function fetchEventsWithRetry(
       const delayMs = calculateRetryDelay(attempt, retryConfig);
 
       console.warn(
-        `[indexer] Rate limit hit (429). Retrying in ${delayMs}ms (attempt ${attempt + 1}/${retryConfig.maxRetries})...`
+        `[indexer] Retriable error hit. Retrying in ${delayMs}ms (attempt ${attempt + 1}/${retryConfig.maxRetries})...`
       );
 
       // Wait before retrying
@@ -249,6 +268,7 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
           server,
           contractIds,
           cursor.lastLedger,
+          undefined,
           retryConfig
         );
 

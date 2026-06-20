@@ -51,6 +51,8 @@ export interface HistoricalIngestionOptions extends HistoricalIngestionConfig {
   onComplete?: OnComplete;
   /** Callback for errors. */
   onError?: OnError;
+  /** If true, continue to next chunk when a chunk fails after retries (default: false). */
+  continueOnFailure?: boolean;
 }
 
 /** Default chunk size (1000 ledgers per request). */
@@ -153,6 +155,7 @@ export async function ingestHistoricalRange(
         server,
         [contractId],
         chunkStart,
+        chunkEnd,
         retryConfig
       );
 
@@ -186,7 +189,14 @@ export async function ingestHistoricalRange(
         console.error(`[historical-ingester] Error in chunk ${chunkIndex}: ${err.message}`);
       }
 
-      // Stop processing on error
+      // Stop or continue based on configuration
+      if (options.continueOnFailure) {
+        console.warn(
+          `[historical-ingester] Skipping chunk ${chunkIndex} due to error and continuing as requested.`
+        );
+        continue;
+      }
+
       throw err;
     }
   }

@@ -61,6 +61,7 @@ describe("fetchEventsWithRetry", function () {
       mockServer as unknown as SorobanRpc.Server,
       ["contract-1"],
       1000,
+      undefined,
       DEFAULT_RETRY_CONFIG
     );
 
@@ -88,6 +89,7 @@ describe("fetchEventsWithRetry", function () {
       mockServer as unknown as SorobanRpc.Server,
       ["contract-1"],
       1000,
+      undefined,
       {
         initialDelayMs: 10, // Short delays for tests
         maxDelayMs: 100,
@@ -108,6 +110,7 @@ describe("fetchEventsWithRetry", function () {
         mockServer as unknown as SorobanRpc.Server,
         ["contract-1"],
         1000,
+        undefined,
         DEFAULT_RETRY_CONFIG
       )
     ).rejects.toThrow("Network connection failed");
@@ -123,6 +126,7 @@ describe("fetchEventsWithRetry", function () {
         mockServer as unknown as SorobanRpc.Server,
         ["contract-1"],
         1000,
+        undefined,
         {
           initialDelayMs: 10,
           maxDelayMs: 100,
