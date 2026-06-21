@@ -6,7 +6,12 @@
  * to handle HTTP 429 (Too Many Requests) errors gracefully.
  */
 
+import { mkdir, readFile, writeFile } from "fs/promises";
+import { dirname } from "path";
 import { SorobanRpc, Horizon, xdr, scValToNative, StrKey } from "stellar-sdk";
+
+import { initRedis, getCachedEvents, setCachedEvents, isRedisEnabled } from "../cache/redisCache";
+
 import {
   initRedis,
   getCachedEvents,
@@ -16,6 +21,7 @@ import {
 import { StellarNetworkException, XdrParsingException } from "../errors";
 import { captureExceptionSync } from "../telemetry";
 import { createIngestionPool, DEFAULT_WORKER_COUNT, type IngestionPoolMetrics } from "./ingestion-pool";
+
 import type { StellarNetworkConfig } from "./client";
 import type { RawEvent } from "../translator/types";
 
@@ -56,6 +62,56 @@ export type EventBatchHandler = (
 /** Callback function invoked when an error occurs. */
 export type ErrorHandler = (error: Error, willRetry: boolean) => void;
 
+/** Durable cursor state saved after successful ingestion. */
+export interface IngestionState extends IndexerCursor {
+  /** Last Horizon/SSE paging token, when available. */
+  pagingToken?: string;
+  /** Last update timestamp in ISO-8601 format. */
+  updatedAt: string;
+}
+
+/** Persistence adapter for ingestion cursor state. */
+export interface IngestionStateStore {
+  load: () => Promise<IngestionState | null>;
+  save: (state: IngestionState) => Promise<void>;
+}
+
+/** In-memory state store useful for tests or ephemeral deployments. */
+export function createMemoryIngestionStateStore(
+  initialState: IngestionState | null = null
+): IngestionStateStore {
+  let state = initialState;
+
+  return {
+    load: async function () {
+      return state ? { ...state } : null;
+    },
+    save: async function (nextState) {
+      state = { ...nextState };
+    },
+  };
+}
+
+/** File-backed state store for lightweight durable cursor persistence. */
+export function createFileIngestionStateStore(filePath: string): IngestionStateStore {
+  return {
+    load: async function () {
+      try {
+        return JSON.parse(await readFile(filePath, "utf8")) as IngestionState;
+      } catch (error: unknown) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+          return null;
+        }
+        throw error;
+      }
+    },
+    save: async function (state) {
+      await mkdir(dirname(filePath), { recursive: true });
+      await writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    },
+  };
+}
+
 /**
  * Sleep utility for implementing delays.
  */
@@ -69,10 +125,7 @@ async function sleep(ms: number): Promise<void> {
  * Calculate the next retry delay using exponential backoff.
  * Exported for testing purposes.
  */
-export function calculateRetryDelay(
-  attemptNumber: number,
-  config: IndexerRetryConfig
-): number {
+export function calculateRetryDelay(attemptNumber: number, config: IndexerRetryConfig): number {
   const delay = config.initialDelayMs * Math.pow(config.backoffMultiplier, attemptNumber);
   return Math.min(delay, config.maxDelayMs);
 }
@@ -139,7 +192,11 @@ function getRetryAfterMs(error: unknown): number | null {
 /**
  * Checks if an error is an HTTP 429 (Too Many Requests) error.
  */
+
+function isRetryableRpcError(error: unknown): boolean {
+
 export function isRetriableError(error: unknown): boolean {
+
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
 
@@ -150,6 +207,13 @@ export function isRetriableError(error: unknown): boolean {
       message.includes("rate limit") ||
       message.includes("timeout") ||
       message.includes("timed out") ||
+
+      message.includes("network") ||
+      message.includes("econnreset") ||
+      message.includes("econnrefused") ||
+      message.includes("fetch failed")
+    );
+
       message.includes("econnreset") ||
       message.includes("etimedout") ||
       message.includes("econnrefused") ||
@@ -164,6 +228,7 @@ export function isRetriableError(error: unknown): boolean {
   const anyErr = error as any;
   if (anyErr && (anyErr.status >= 500 || anyErr.response?.status >= 500)) {
     return true;
+
   }
 
   return false;
@@ -225,8 +290,13 @@ export async function fetchEventsWithRetry(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
+
+      // Check if this is a rate limit error
+      const isRateLimit = isRetryableRpcError(error);
+
       // Check if this is a retriable error (rate limit, network, timeouts, 5xx)
       const isRetriable = isRetriableError(error);
+
 
       // If it's not retriable, throw immediately
       if (!isRetriable) {
@@ -282,6 +352,8 @@ export interface IndexerOptions {
   pollIntervalMs: number;
   /** Retry configuration. */
   retryConfig?: IndexerRetryConfig;
+  /** Optional durable state store used to resume after restarts. */
+  stateStore?: IngestionStateStore;
   /** Callback for handling event batches. */
   onEvents: EventBatchHandler;
   /** Callback for handling errors. */
@@ -334,6 +406,7 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
     startLedger,
     pollIntervalMs,
     retryConfig = DEFAULT_RETRY_CONFIG,
+    stateStore,
     onEvents,
     onError,
   } = options;
@@ -357,6 +430,16 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
       try {
         console.log(`[indexer] Fetching events from ledger ${cursor.lastLedger}...`);
 
+        if (stateStore) {
+          const storedState = await stateStore.load();
+          if (storedState && storedState.lastLedger > cursor.lastLedger) {
+            cursor = {
+              lastLedger: storedState.lastLedger,
+              paginationCursor: storedState.paginationCursor ?? storedState.pagingToken,
+            };
+          }
+        }
+
         // Fetch events with retry logic
         const response = await fetchEventsWithRetry(
           server,
@@ -379,7 +462,11 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
         if (response.latestLedger) {
           cursor = {
             lastLedger: response.latestLedger,
+
+            paginationCursor: (response as { cursor?: string }).cursor,
+
             paginationCursor: (response as unknown as Record<string, unknown>).cursor as string | undefined,
+
           };
           console.log(
             `[indexer] Cursor updated to ledger ${cursor.lastLedger}` +
@@ -390,6 +477,12 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
         // Wait before next poll
         await sleep(pollIntervalMs);
       } catch (error) {
+
+        const err = error instanceof Error ? error : new Error(String(error));
+
+        // Check if we'll retry
+        const willRetry = isRetryableRpcError(error);
+
         const willRetry = isRetriableError(error);
         const err =
           error instanceof StellarNetworkException
@@ -452,6 +545,14 @@ export interface StreamingIndexerOptions {
   onEvent: (event: RawEvent) => void | Promise<void>;
   /** Callback for handling errors. */
   onError?: (error: Error) => void;
+
+  /** Optional durable state store used to resume streaming from the last paging token. */
+  stateStore?: IngestionStateStore;
+  /** Cold-start lookback window in ledgers when no stored cursor exists. */
+  coldStartLookbackLedgers?: number;
+  /** Retry configuration for stream reconnection backoff. */
+  retryConfig?: IndexerRetryConfig;
+
   /**
    * Size of the parallel consumer fleet that performs the CPU-heavy work
    * (XDR body decoding + the `onEvent` handler). Defaults to
@@ -495,6 +596,7 @@ function envelopeToRawEvent(envelope: StreamEventEnvelope): RawEvent {
     timestamp: Math.floor(Date.now() / 1000), // Horizon tx doesn't expose close time in the stream.
     txHash,
   };
+
 }
 
 /**
@@ -520,11 +622,53 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
   stop: () => void;
   getMetrics: () => IngestionPoolMetrics;
 } {
+
+  const {
+    networkConfig,
+    contractIds,
+    onEvent,
+    onError,
+    stateStore,
+    coldStartLookbackLedgers = 0,
+    retryConfig = DEFAULT_RETRY_CONFIG,
+  } = options;
+
   const { networkConfig, contractIds, onEvent, onError, workerCount, maxQueueSize } = options;
+
   const server = new Horizon.Server(networkConfig.horizonUrl);
 
   let isRunning = true;
   let closeStream: (() => void) | null = null;
+  let reconnectAttempt = 0;
+
+  async function resolveStartupCursor(): Promise<string> {
+    const storedState = stateStore ? await stateStore.load() : null;
+    if (storedState?.pagingToken || storedState?.paginationCursor) {
+      return storedState.pagingToken ?? storedState.paginationCursor ?? "now";
+    }
+
+    if (storedState?.lastLedger) {
+      return String(storedState.lastLedger);
+    }
+
+    if (coldStartLookbackLedgers > 0) {
+      const response = await server.ledgers().order("desc").limit(1).call();
+      const latestLedger = Number(response.records?.[0]?.sequence ?? 0);
+      if (latestLedger > 0) {
+        return String(Math.max(1, latestLedger - coldStartLookbackLedgers));
+      }
+    }
+
+    return "now";
+  }
+
+  function scheduleReconnect(): void {
+    if (!isRunning) return;
+    const delayMs = calculateRetryDelay(reconnectAttempt, retryConfig);
+    reconnectAttempt = Math.min(reconnectAttempt + 1, retryConfig.maxRetries);
+    console.log(`[streaming-indexer] Attempting to reconnect in ${delayMs}ms...`);
+    setTimeout(startStream, delayMs);
+  }
 
   // The consumer fleet: each worker decodes a queued event and runs onEvent.
   const pool = createIngestionPool<StreamEventEnvelope>({
@@ -554,17 +698,24 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
   async function startStream() {
     if (!isRunning) return;
 
+
+    const startupCursor = await resolveStartupCursor();
+    console.log(
+      `[streaming-indexer] Starting Horizon transaction stream from cursor ${startupCursor}...`
+
     console.log(
       `[streaming-indexer] Starting Horizon transaction stream (${workerCount ?? DEFAULT_WORKER_COUNT} consumers)...`
+
     );
 
     try {
       closeStream = server
         .transactions()
-        .cursor("now")
+        .cursor(startupCursor)
         .stream({
           // Producer: parse the envelope, route events, return fast.
           onmessage: async (tx: any) => {
+            reconnectAttempt = 0;
             if (!tx.result_meta_xdr) return;
 
             try {
@@ -596,9 +747,24 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
                   contractId,
                   txId: tx.id,
                   txHash: tx.hash,
-                  ledger: tx.ledger_attr,
+
+                };
+
+                await onEvent(rawEvent);
+
+                if (stateStore) {
+                  const pagingToken = tx.paging_token ?? tx.pagingToken ?? rawEvent.id;
+                  await stateStore.save({
+                    lastLedger: rawEvent.ledger,
+                    paginationCursor: pagingToken,
+                    pagingToken,
+                    updatedAt: new Date().toISOString(),
+                  });
+                }
+   ledger: tx.ledger_attr,
                   eventIndex,
                 });
+
               }
             } catch (err) {
               const xdrError = new XdrParsingException(
@@ -624,14 +790,14 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
             captureExceptionSync(networkError);
             if (onError) onError(networkError);
 
-            // Auto-reconnect logic
-            if (isRunning) {
-              console.log("[streaming-indexer] Attempting to reconnect in 5s...");
-              setTimeout(startStream, 5000);
-            }
+            scheduleReconnect();
           },
         });
     } catch (err) {
+
+      console.error("[streaming-indexer] Failed to start stream:", err);
+      scheduleReconnect();
+
       const networkError = new StellarNetworkException(
         err instanceof Error ? err.message : "Failed to start Horizon stream",
         { operation: "startHorizonStream" },
