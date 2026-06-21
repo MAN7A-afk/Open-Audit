@@ -15,15 +15,66 @@ import type {
 } from "./types";
 
 /**
+ * Sanitizes a single parameter value before it is interpolated into a template.
+ *
+ * Security guarantees:
+ *   - HTML special characters are escaped so values cannot inject markup or
+ *     script tags into dashboard descriptions rendered as innerHTML.
+ *   - The string is trimmed and capped at MAX_PARAM_LENGTH to prevent
+ *     resource-exhaustion via extremely long blockchain payloads.
+ *   - No eval(), Function(), or dynamic code execution is used anywhere in
+ *     the interpolation pipeline.
+ */
+const MAX_PARAM_LENGTH = 512;
+
+export function sanitizeTemplateParam(value: string): string {
+  if (typeof value !== "string") return "";
+  return escapeHtml(value.trim().slice(0, MAX_PARAM_LENGTH));
+}
+
+/**
+ * Sanitizes a translated text field (description, eventType, blueprintName)
+ * before it is stored or surfaced in the UI.
+ *
+ * Options:
+ *   maxLength  — hard cap on output length (default: 1024)
+ *   allowHex   — when true, skips HTML-escaping for hex-only strings like
+ *                contract addresses and tx hashes (they can't carry XSS payloads)
+ */
+export interface SanitizeOptions {
+  maxLength?: number;
+  allowHex?: boolean;
+}
+
+export function sanitizeTextField(
+  value: string,
+  options: SanitizeOptions = {}
+): string {
+  if (typeof value !== "string") return "";
+  const { maxLength = 1024, allowHex = false } = options;
+  const trimmed = value.trim().slice(0, maxLength);
+  if (allowHex && /^(0x)?[0-9a-fA-F\s.]+$/.test(trimmed)) return trimmed;
+  return escapeHtml(trimmed);
+}
+
+/**
  * Replaces placeholders in a template string with values from a params dictionary.
  * e.g. "User {from} sent {amount} tokens" -> "User GABC...1234 sent 100.00 tokens"
+ *
+ * Security: every param value is passed through sanitizeTemplateParam() before
+ * substitution so blockchain-sourced data cannot inject HTML or script content.
+ * Token replacement uses a plain string replace — no eval() or Function() calls.
  */
 export function interpolateTemplate(
   template: string,
   params: Record<string, string>
 ): string {
-  return template.replace(/\{(\w+)\}/g, (match, key) => {
-    return params[key] !== undefined ? params[key] : match;
+  if (typeof template !== "string") return "";
+  // Sanitize the template itself to prevent stored-XSS via contributed templates
+  const safeTemplate = escapeHtml(template.slice(0, 2048));
+  return safeTemplate.replace(/\{(\w+)\}/g, (match, key) => {
+    if (params[key] === undefined) return match;
+    return sanitizeTemplateParam(params[key]);
   });
 }
 

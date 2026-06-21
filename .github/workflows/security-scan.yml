@@ -1,0 +1,82 @@
+name: Security Scan (Secrets + Dependencies)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  gitleaks:
+    name: Secret Scanning with Gitleaks
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_SARIF: true
+          # gitleaks-action@v2 writes results.sarif when GITLEAKS_ENABLE_SARIF=true
+          GITLEAKS_SARIF_FILE: results.sarif
+
+      - name: Show SARIF outputs (debug)
+        if: always()
+        run: ls -la *.sarif 2>/dev/null || echo "No .sarif files found"
+
+      - name: Upload SARIF to GitHub
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif
+          category: gitleaks
+
+  trivy:
+    name: Dependency Scanning with Trivy
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⚠️  aquasecurity/trivy-action was subject to a supply-chain compromise
+      # (March 2026) where nearly all version tags were force-pushed with
+      # malicious code. We install Trivy directly via the official install
+      # script pinned to a specific version instead of using the Action wrapper.
+      # See: https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.61.0
+
+      - name: Run Trivy filesystem scan
+        run: |
+          trivy fs . \
+            --format sarif \
+            --output trivy-results.sarif \
+            --exit-code 1 \
+            --severity CRITICAL,HIGH \
+            --scanners vuln \
+            --no-progress
+        # exit-code 1 means the step fails when HIGH/CRITICAL vulns are found.
+        # We still want the SARIF upload to run, so we use continue-on-error.
+        continue-on-error: true
+
+      - name: Upload Trivy SARIF to GitHub
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy

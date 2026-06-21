@@ -289,11 +289,11 @@ function applyBlueprint(event: RawEvent, blueprint: TranslationBlueprint, lang: 
 
   return {
     raw: event,
-    description: result.description,
+    description: result.description ? sanitizeTextField(result.description) : null,
     status: "translated",
     blueprintName: blueprint.contractName,
-    eventType: result.eventType,
-    schemaVersion: blueprint.version ?? null,
+    eventType: result.eventType ? sanitizeTextField(result.eventType, { maxLength: 64 }) : null,
+    schemaVersion: (blueprint as any).version ?? null,
   };
 }
 
