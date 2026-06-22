@@ -71,6 +71,7 @@ const EventType = new GraphQLObjectType({
     status: { type: new GraphQLNonNull(GraphQLString) },
     blueprintName: { type: GraphQLString },
     eventType: { type: GraphQLString },
+    ipfsCids: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
     rpcVerified: { type: new GraphQLNonNull(GraphQLBoolean) },
     createdAt: { type: new GraphQLNonNull(GraphQLString) },
     updatedAt: { type: new GraphQLNonNull(GraphQLString) },

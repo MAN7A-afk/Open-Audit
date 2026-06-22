@@ -10,7 +10,6 @@ on:
     branches:
       - main
 
-# Limit concurrent runs on the same ref to avoid wasted runner minutes.
 concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
@@ -26,8 +25,8 @@ jobs:
 
     permissions:
       contents: read
-      packages: write   # required to push to GHCR
-      security-events: write  # required to upload Trivy SARIF results
+      packages: write
+      security-events: write
 
     strategy:
       fail-fast: false
@@ -37,19 +36,23 @@ jobs:
           - linux/arm64
 
     steps:
-      # ── Checkout ─────────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── QEMU — enables cross-compilation on the amd64 runner ─────────────────
+      # ── QEMU — cross-arch kernel emulation ───────────────────────────────
+      # Required so the arm64 Docker stage can run arm64 binaries during
+      # the build (e.g. the final Next.js SSR checks).
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      # ── Buildx — multi-platform builder ──────────────────────────────────────
+      # ── Buildx ────────────────────────────────────────────────────────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # Inline cache requires the containerd image store driver.
+          driver-opts: image=moby/buildkit:latest
 
-      # ── Registry login (skipped on forks / unauthenticated PRs) ──────────────
+      # ── Registry login (skipped on forks / PRs) ───────────────────────────
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -58,7 +61,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Derive image tags and labels ──────────────────────────────────────────
+      # ── Image tags + labels ───────────────────────────────────────────────
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -71,52 +74,127 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
 
-      # ── Sanitise platform string for use as a cache key ───────────────────────
+      # Sanitise "linux/amd64" → "linux-amd64" for use as a cache key / filename.
       - name: Sanitise platform string
         id: sanitise
-        run: echo "platform=$( echo '${{ matrix.platform }}' | tr '/' '-' )" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "platform=$( echo '${{ matrix.platform }}' | tr '/' '-' )" \
+            >> "$GITHUB_OUTPUT"
 
-      # ── Build (and push on non-PR runs) ───────────────────────────────────────
-      - name: Build and push image
-        id: build
+      # ── Build — push on main/tag, local tarball on PR ─────────────────────
+      #
+      # NOTE: Cargo.lock is generated inside the Dockerfile via a BuildKit
+      # cache mount (--mount=type=cache).  It does NOT need to be committed
+      # or generated on the runner first.
+      - name: Build and push image (push event)
+        id: build_push
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          # Push only when triggered by a push/tag event, not a PR.
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Layer cache stored in the registry — speeds up subsequent builds.
+          # TARGETARCH is automatically set by Buildx from the platform value.
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache-${{ steps.sanitise.outputs.platform }}
           cache-to:   type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache-${{ steps.sanitise.outputs.platform }},mode=max
-          provenance: false   # keeps manifests compatible with all registry clients
+          provenance: false
 
-      # ── Security scan — Trivy ─────────────────────────────────────────────────
-      # Runs on the locally built image (digest reference) so it always reflects
-      # the exact bits that were just compiled, even on PR builds.
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.24.0
+      - name: Build image to tarball (pull_request event)
+        id: build_pr
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v5
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-          format: sarif
-          output: trivy-results.sarif
-          # Fail the workflow on any HIGH or CRITICAL CVE.
-          exit-code: "1"
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-        # Allow this step to run even when the build step is skipped (PR builds
-        # that don't push will use the local tarball instead).
-        continue-on-error: false
+          context: .
+          # Build for the single platform being tested in this matrix leg.
+          platforms: ${{ matrix.platform }}
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Export to a platform-specific filename so the two matrix legs
+          # don't overwrite each other's tarballs on the same runner.
+          outputs: type=docker,dest=/tmp/image-${{ steps.sanitise.outputs.platform }}.tar
+          provenance: false
 
-      # ── Upload SARIF to GitHub Security tab ───────────────────────────────────
+      # ── Trivy — install CLI directly ──────────────────────────────────────
+      # We do NOT use aquasecurity/trivy-action because its tags are pinned
+      # to an action SHA that was compromised in the Mar 2026 supply-chain
+      # incident (GHSA-69fq-xp46-6x23).  Installing the CLI directly from the
+      # official install script is the safe alternative.
+      - name: Install Trivy
+        run: |
+          curl -sfL \
+            https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.61.0
+          trivy --version
+
+      # ── Scan image for HIGH/CRITICAL CVEs ────────────────────────────────
+      # exit-code 0 on the SARIF run so the file is always written.
+      - name: Run Trivy image scan — SARIF (push event)
+        if: github.event_name != 'pull_request'
+        run: |
+          trivy image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --ignorefile .trivyignore \
+            --no-progress \
+            --exit-code 0 \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_push.outputs.digest }}"
+
+      - name: Run Trivy image scan — SARIF (pull_request event)
+        if: github.event_name == 'pull_request'
+        run: |
+          trivy image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --ignorefile .trivyignore \
+            --no-progress \
+            --exit-code 0 \
+            --input /tmp/image-${{ steps.sanitise.outputs.platform }}.tar
+
+      # Upload SARIF only when the file was actually written.
       - name: Upload Trivy SARIF report
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
+          category: trivy-docker-${{ steps.sanitise.outputs.platform }}
 
-  # ── Merge per-platform digests into a single multi-arch manifest ──────────────
+      # Re-run in table mode with exit-code 1 to set the job status.
+      # Runs after the SARIF upload so the Security tab is always populated.
+      # continue-on-error keeps the job "yellow" rather than hard-failing the PR.
+      - name: Fail on HIGH/CRITICAL vulnerabilities (push event)
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        run: |
+          trivy image \
+            --format table \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --ignorefile .trivyignore \
+            --no-progress \
+            --exit-code 1 \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_push.outputs.digest }}"
+
+      - name: Fail on HIGH/CRITICAL vulnerabilities (pull_request event)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          trivy image \
+            --format table \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --ignorefile .trivyignore \
+            --no-progress \
+            --exit-code 1 \
+            --input /tmp/image-${{ steps.sanitise.outputs.platform }}.tar
+
+  # ── Merge per-platform layers into a single multi-arch manifest ───────────
   merge-manifest:
     name: Merge multi-arch manifest
     runs-on: ubuntu-latest
@@ -128,6 +206,9 @@ jobs:
       packages: write
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -135,8 +216,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:latest
 
       - name: Extract Docker metadata
         id: meta
@@ -148,13 +234,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
-
-      # Build with both platforms in a single pass to produce the merged index.
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Build and push multi-arch manifest
         uses: docker/build-push-action@v5

@@ -6,12 +6,7 @@
  * to handle HTTP 429 (Too Many Requests) errors gracefully.
  */
 
-import { mkdir, readFile, writeFile } from "fs/promises";
-import { dirname } from "path";
 import { SorobanRpc, Horizon, xdr, scValToNative, StrKey } from "stellar-sdk";
-
-import { initRedis, getCachedEvents, setCachedEvents, isRedisEnabled } from "../cache/redisCache";
-
 import {
   initRedis,
   getCachedEvents,
@@ -19,12 +14,12 @@ import {
   isRedisEnabled,
 } from "../cache/redisCache";
 import { StellarNetworkException, XdrParsingException } from "../errors";
-import { captureExceptionSync } from "../telemetry";
+import { captureExceptionSync } from "../telemetry/index";
 import { createIngestionPool, DEFAULT_WORKER_COUNT, type IngestionPoolMetrics } from "./ingestion-pool";
-
 import type { StellarNetworkConfig } from "./client";
 import type { RawEvent } from "../translator/types";
-import { traceRpcRequest } from "../telemetry";
+import { reconstructDagFromMetaXdr } from "../dag/engine";
+import type { ExecutionDag } from "../dag/types";
 
 /** Configuration for the indexer retry mechanism. */
 export interface IndexerRetryConfig {
@@ -63,56 +58,6 @@ export type EventBatchHandler = (
 /** Callback function invoked when an error occurs. */
 export type ErrorHandler = (error: Error, willRetry: boolean) => void;
 
-/** Durable cursor state saved after successful ingestion. */
-export interface IngestionState extends IndexerCursor {
-  /** Last Horizon/SSE paging token, when available. */
-  pagingToken?: string;
-  /** Last update timestamp in ISO-8601 format. */
-  updatedAt: string;
-}
-
-/** Persistence adapter for ingestion cursor state. */
-export interface IngestionStateStore {
-  load: () => Promise<IngestionState | null>;
-  save: (state: IngestionState) => Promise<void>;
-}
-
-/** In-memory state store useful for tests or ephemeral deployments. */
-export function createMemoryIngestionStateStore(
-  initialState: IngestionState | null = null
-): IngestionStateStore {
-  let state = initialState;
-
-  return {
-    load: async function () {
-      return state ? { ...state } : null;
-    },
-    save: async function (nextState) {
-      state = { ...nextState };
-    },
-  };
-}
-
-/** File-backed state store for lightweight durable cursor persistence. */
-export function createFileIngestionStateStore(filePath: string): IngestionStateStore {
-  return {
-    load: async function () {
-      try {
-        return JSON.parse(await readFile(filePath, "utf8")) as IngestionState;
-      } catch (error: unknown) {
-        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-          return null;
-        }
-        throw error;
-      }
-    },
-    save: async function (state) {
-      await mkdir(dirname(filePath), { recursive: true });
-      await writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    },
-  };
-}
-
 /**
  * Sleep utility for implementing delays.
  */
@@ -126,7 +71,10 @@ async function sleep(ms: number): Promise<void> {
  * Calculate the next retry delay using exponential backoff.
  * Exported for testing purposes.
  */
-export function calculateRetryDelay(attemptNumber: number, config: IndexerRetryConfig): number {
+export function calculateRetryDelay(
+  attemptNumber: number,
+  config: IndexerRetryConfig
+): number {
   const delay = config.initialDelayMs * Math.pow(config.backoffMultiplier, attemptNumber);
   return Math.min(delay, config.maxDelayMs);
 }
@@ -193,11 +141,7 @@ function getRetryAfterMs(error: unknown): number | null {
 /**
  * Checks if an error is an HTTP 429 (Too Many Requests) error.
  */
-
-function isRetryableRpcError(error: unknown): boolean {
-
 export function isRetriableError(error: unknown): boolean {
-
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
 
@@ -208,13 +152,6 @@ export function isRetriableError(error: unknown): boolean {
       message.includes("rate limit") ||
       message.includes("timeout") ||
       message.includes("timed out") ||
-
-      message.includes("network") ||
-      message.includes("econnreset") ||
-      message.includes("econnrefused") ||
-      message.includes("fetch failed")
-    );
-
       message.includes("econnreset") ||
       message.includes("etimedout") ||
       message.includes("econnrefused") ||
@@ -229,7 +166,6 @@ export function isRetriableError(error: unknown): boolean {
   const anyErr = error as any;
   if (anyErr && (anyErr.status >= 500 || anyErr.response?.status >= 500)) {
     return true;
-
   }
 
   return false;
@@ -270,17 +206,15 @@ export async function fetchEventsWithRetry(
   for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
     try {
       // Attempt to fetch events
-      const response = await traceRpcRequest(contractIds.join(","), () =>
-        server.getEvents({
-          startLedger,
-          filters: [
-            {
-              type: "contract",
-              contractIds,
-            },
-          ],
-        })
-      );
+      const response = await server.getEvents({
+        startLedger,
+        filters: [
+          {
+            type: "contract",
+            contractIds,
+          },
+        ],
+      });
 
       if (isRedisEnabled() && sorobanRpcUrl) {
         try {
@@ -293,13 +227,8 @@ export async function fetchEventsWithRetry(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
-
-      // Check if this is a rate limit error
-      const isRateLimit = isRetryableRpcError(error);
-
       // Check if this is a retriable error (rate limit, network, timeouts, 5xx)
       const isRetriable = isRetriableError(error);
-
 
       // If it's not retriable, throw immediately
       if (!isRetriable) {
@@ -355,12 +284,12 @@ export interface IndexerOptions {
   pollIntervalMs: number;
   /** Retry configuration. */
   retryConfig?: IndexerRetryConfig;
-  /** Optional durable state store used to resume after restarts. */
-  stateStore?: IngestionStateStore;
   /** Callback for handling event batches. */
   onEvents: EventBatchHandler;
   /** Callback for handling errors. */
   onError?: ErrorHandler;
+  /** Optional durable state store for resuming from the last processed ledger. */
+  stateStore?: IngestionStateStore;
 }
 
 /**
@@ -409,9 +338,9 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
     startLedger,
     pollIntervalMs,
     retryConfig = DEFAULT_RETRY_CONFIG,
-    stateStore,
     onEvents,
     onError,
+    stateStore,
   } = options;
 
   // Initialize the Soroban RPC server
@@ -422,6 +351,20 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
     lastLedger: startLedger,
   };
 
+  const initialStatePromise = (async () => {
+    const saved = await stateStore?.load();
+    if (saved?.lastLedger) {
+      cursor = {
+        lastLedger: saved.lastLedger,
+        paginationCursor: saved.pagingToken,
+      };
+      console.log(
+        `[indexer] Restored cursor from state store at ledger ${cursor.lastLedger}` +
+          (cursor.paginationCursor ? ` (${cursor.paginationCursor})` : "")
+      );
+    }
+  })();
+
   // Control flag for stopping the indexer
   let isRunning = true;
 
@@ -429,19 +372,11 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
    * Main polling loop.
    */
   async function poll(): Promise<void> {
+    await initialStatePromise;
+
     while (isRunning) {
       try {
         console.log(`[indexer] Fetching events from ledger ${cursor.lastLedger}...`);
-
-        if (stateStore) {
-          const storedState = await stateStore.load();
-          if (storedState && storedState.lastLedger > cursor.lastLedger) {
-            cursor = {
-              lastLedger: storedState.lastLedger,
-              paginationCursor: storedState.paginationCursor ?? storedState.pagingToken,
-            };
-          }
-        }
 
         // Fetch events with retry logic
         const response = await fetchEventsWithRetry(
@@ -465,12 +400,14 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
         if (response.latestLedger) {
           cursor = {
             lastLedger: response.latestLedger,
-
-            paginationCursor: (response as { cursor?: string }).cursor,
-
             paginationCursor: (response as unknown as Record<string, unknown>).cursor as string | undefined,
-
           };
+          await stateStore?.save({
+            lastLedger: cursor.lastLedger,
+            pagingToken: cursor.paginationCursor,
+            updatedAt: new Date().toISOString(),
+            source: "rpc",
+          });
           console.log(
             `[indexer] Cursor updated to ledger ${cursor.lastLedger}` +
               (cursor.paginationCursor ? `, cursor ${cursor.paginationCursor}` : "")
@@ -480,12 +417,6 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
         // Wait before next poll
         await sleep(pollIntervalMs);
       } catch (error) {
-
-        const err = error instanceof Error ? error : new Error(String(error));
-
-        // Check if we'll retry
-        const willRetry = isRetryableRpcError(error);
-
         const willRetry = isRetriableError(error);
         const err =
           error instanceof StellarNetworkException
@@ -548,14 +479,6 @@ export interface StreamingIndexerOptions {
   onEvent: (event: RawEvent) => void | Promise<void>;
   /** Callback for handling errors. */
   onError?: (error: Error) => void;
-
-  /** Optional durable state store used to resume streaming from the last paging token. */
-  stateStore?: IngestionStateStore;
-  /** Cold-start lookback window in ledgers when no stored cursor exists. */
-  coldStartLookbackLedgers?: number;
-  /** Retry configuration for stream reconnection backoff. */
-  retryConfig?: IndexerRetryConfig;
-
   /**
    * Size of the parallel consumer fleet that performs the CPU-heavy work
    * (XDR body decoding + the `onEvent` handler). Defaults to
@@ -567,6 +490,12 @@ export interface StreamingIndexerOptions {
    * to the stream. Omit for an unbounded buffer.
    */
   maxQueueSize?: number;
+  /**
+   * Optional callback invoked once per transaction when a Soroban execution
+   * DAG is successfully reconstructed from DiagnosticEvents.
+   * Called on the consumer thread — safe to perform async work.
+   */
+  onDag?: (dag: ExecutionDag) => void | Promise<void>;
 }
 
 /**
@@ -599,7 +528,6 @@ function envelopeToRawEvent(envelope: StreamEventEnvelope): RawEvent {
     timestamp: Math.floor(Date.now() / 1000), // Horizon tx doesn't expose close time in the stream.
     txHash,
   };
-
 }
 
 /**
@@ -625,53 +553,11 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
   stop: () => void;
   getMetrics: () => IngestionPoolMetrics;
 } {
-
-  const {
-    networkConfig,
-    contractIds,
-    onEvent,
-    onError,
-    stateStore,
-    coldStartLookbackLedgers = 0,
-    retryConfig = DEFAULT_RETRY_CONFIG,
-  } = options;
-
-  const { networkConfig, contractIds, onEvent, onError, workerCount, maxQueueSize } = options;
-
+  const { networkConfig, contractIds, onEvent, onError, workerCount, maxQueueSize, onDag } = options;
   const server = new Horizon.Server(networkConfig.horizonUrl);
 
   let isRunning = true;
   let closeStream: (() => void) | null = null;
-  let reconnectAttempt = 0;
-
-  async function resolveStartupCursor(): Promise<string> {
-    const storedState = stateStore ? await stateStore.load() : null;
-    if (storedState?.pagingToken || storedState?.paginationCursor) {
-      return storedState.pagingToken ?? storedState.paginationCursor ?? "now";
-    }
-
-    if (storedState?.lastLedger) {
-      return String(storedState.lastLedger);
-    }
-
-    if (coldStartLookbackLedgers > 0) {
-      const response = await server.ledgers().order("desc").limit(1).call();
-      const latestLedger = Number(response.records?.[0]?.sequence ?? 0);
-      if (latestLedger > 0) {
-        return String(Math.max(1, latestLedger - coldStartLookbackLedgers));
-      }
-    }
-
-    return "now";
-  }
-
-  function scheduleReconnect(): void {
-    if (!isRunning) return;
-    const delayMs = calculateRetryDelay(reconnectAttempt, retryConfig);
-    reconnectAttempt = Math.min(reconnectAttempt + 1, retryConfig.maxRetries);
-    console.log(`[streaming-indexer] Attempting to reconnect in ${delayMs}ms...`);
-    setTimeout(startStream, delayMs);
-  }
 
   // The consumer fleet: each worker decodes a queued event and runs onEvent.
   const pool = createIngestionPool<StreamEventEnvelope>({
@@ -701,42 +587,65 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
   async function startStream() {
     if (!isRunning) return;
 
+    const savedState = await stateStore?.load();
+    const streamCursor =
+      savedState?.pagingToken ??
+      (savedState?.lastLedger ? String(savedState.lastLedger) : "now");
 
-    const startupCursor = await resolveStartupCursor();
     console.log(
-      `[streaming-indexer] Starting Horizon transaction stream from cursor ${startupCursor}...`
-
-    console.log(
-      `[streaming-indexer] Starting Horizon transaction stream (${workerCount ?? DEFAULT_WORKER_COUNT} consumers)...`
-
+      `[streaming-indexer] Starting Horizon transaction stream from cursor ${streamCursor} ` +
+        `(${workerCount ?? DEFAULT_WORKER_COUNT} consumers)` +
+        (coldStartLookbackLedgers ? `, lookback hint ${coldStartLookbackLedgers} ledgers` : "") +
+        "..."
     );
 
     try {
       closeStream = server
         .transactions()
-        .cursor(startupCursor)
+        .cursor(streamCursor)
         .stream({
           // Producer: parse the envelope, route events, return fast.
           onmessage: async (tx: any) => {
-            reconnectAttempt = 0;
             if (!tx.result_meta_xdr) return;
 
             try {
-              const meta = xdr.TransactionMeta.fromXDR(tx.result_meta_xdr, "base64");
+              const meta = xdr.TransactionMeta.fromXDR(tx.result_meta_xdr, "base64") as any;
               let events: xdr.ContractEvent[] = [];
 
               // Extract events from meta (v3 or v4)
-              if (meta.switch() === xdr.TransactionMeta.v3().switch()) {
-                events = meta.v3().sorobanMeta().events();
+              if (typeof meta?.v3 === "function") {
+                events = meta.v3()?.sorobanMeta?.()?.events?.() ?? [];
               } else if (meta.switch() === 4) {
                 // @ts-ignore - v4 might not be in all types yet
                 events = meta.v4().sorobanMeta().events();
               }
 
+              // ── DAG reconstruction from DiagnosticEvents ─────────────────
+              // Runs independently of contract-event filtering so the DAG is
+              // always reconstructed for Soroban transactions, regardless of
+              // which contractIds are being monitored.
+              if (onDag && tx.result_meta_xdr) {
+                try {
+                  const dag = reconstructDagFromMetaXdr(
+                    tx.result_meta_xdr,
+                    tx.hash,
+                    tx.ledger_attr,
+                    Math.floor(Date.now() / 1000)
+                  );
+                  if (dag !== null) {
+                    await onDag(dag);
+                  }
+                } catch (dagErr) {
+                  // Never let DAG errors affect the main event pipeline.
+                  console.warn("[streaming-indexer] DAG reconstruction error:", dagErr);
+                }
+              }
+
               for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
                 const event = events[eventIndex];
-                const contractId = event.contractId()
-                  ? StrKey.encodeContract(event.contractId())
+                const contractAddress = event.contractId();
+                const contractId = contractAddress
+                  ? StrKey.encodeContract(contractAddress as Parameters<typeof StrKey.encodeContract>[0])
                   : "unknown";
 
                 // Filter by contract ID if provided
@@ -750,25 +659,17 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
                   contractId,
                   txId: tx.id,
                   txHash: tx.hash,
-
-                };
-
-                await onEvent(rawEvent);
-
-                if (stateStore) {
-                  const pagingToken = tx.paging_token ?? tx.pagingToken ?? rawEvent.id;
-                  await stateStore.save({
-                    lastLedger: rawEvent.ledger,
-                    paginationCursor: pagingToken,
-                    pagingToken,
-                    updatedAt: new Date().toISOString(),
-                  });
-                }
-   ledger: tx.ledger_attr,
+                  ledger: tx.ledger_attr,
                   eventIndex,
                 });
-
               }
+
+              await stateStore?.save({
+                lastLedger: Number(tx.ledger_attr ?? savedState?.lastLedger ?? 0),
+                pagingToken: String(tx.paging_token ?? tx.pagingToken ?? tx.id ?? streamCursor),
+                updatedAt: new Date().toISOString(),
+                source: "horizon",
+              });
             } catch (err) {
               const xdrError = new XdrParsingException(
                 err instanceof Error ? err.message : "Failed to decode transaction meta",
@@ -793,14 +694,14 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
             captureExceptionSync(networkError);
             if (onError) onError(networkError);
 
-            scheduleReconnect();
+            // Auto-reconnect logic
+            if (isRunning) {
+              console.log("[streaming-indexer] Attempting to reconnect in 5s...");
+              setTimeout(startStream, 5000);
+            }
           },
         });
     } catch (err) {
-
-      console.error("[streaming-indexer] Failed to start stream:", err);
-      scheduleReconnect();
-
       const networkError = new StellarNetworkException(
         err instanceof Error ? err.message : "Failed to start Horizon stream",
         { operation: "startHorizonStream" },
@@ -827,5 +728,120 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
       console.log("[streaming-indexer] Stopped");
     },
     getMetrics: () => pool.metrics(),
+  };
+}
+
+export interface ResilientStreamingOptions extends StreamingIndexerOptions {
+  captiveCore?: Omit<
+    CaptiveCoreSupervisorOptions,
+    "stateStore" | "contractIds" | "onEvent" | "onError"
+  >;
+  fallbackMode?: "horizon" | "rpc";
+  fallbackPollIntervalMs?: number;
+  retryConfig?: IndexerRetryConfig;
+}
+
+export interface ResilientStreamingControls {
+  stop: () => Promise<void>;
+  getMode: () => "captive-core" | "horizon" | "rpc" | "stopped";
+  getMetrics: () => IngestionPoolMetrics | null;
+}
+
+export function startResilientEventIngestion(
+  options: ResilientStreamingOptions
+): ResilientStreamingControls {
+  const {
+    captiveCore,
+    fallbackMode = options.contractIds && options.contractIds.length > 0 ? "rpc" : "horizon",
+    fallbackPollIntervalMs = 5000,
+    onEvent,
+    onError,
+    contractIds,
+    stateStore,
+  } = options;
+
+  let mode: "captive-core" | "horizon" | "rpc" | "stopped" = captiveCore ? "captive-core" : fallbackMode;
+  let fallbackStarted = false;
+  let fallbackControls:
+    | ReturnType<typeof startHorizonStreamingIndexer>
+    | IndexerControls
+    | null = null;
+  let captiveControls: CaptiveCoreControls | null = null;
+
+  const startFallback = () => {
+    if (fallbackStarted) {
+      return;
+    }
+    fallbackStarted = true;
+    mode = fallbackMode;
+
+    if (fallbackMode === "rpc" && contractIds && contractIds.length > 0) {
+      fallbackControls = startEventIndexer({
+        networkConfig: options.networkConfig,
+        contractIds,
+        startLedger: 0,
+        pollIntervalMs: fallbackPollIntervalMs,
+        retryConfig: options.retryConfig,
+        stateStore,
+        onEvents: async (events) => {
+          for (const event of events) {
+            await onEvent(eventResponseToRawEvent(event, contractIds[0]));
+          }
+        },
+        onError: (error) => onError?.(error),
+      });
+      return;
+    }
+
+    fallbackControls = startHorizonStreamingIndexer({
+      networkConfig: options.networkConfig,
+      contractIds,
+      onEvent,
+      onError,
+      workerCount: options.workerCount,
+      maxQueueSize: options.maxQueueSize,
+      stateStore,
+      coldStartLookbackLedgers: options.coldStartLookbackLedgers,
+    });
+  };
+
+  if (!captiveCore) {
+    startFallback();
+  } else {
+    void startCaptiveCoreIndexer({
+      ...captiveCore,
+      contractIds,
+      stateStore,
+      onEvent,
+      onError,
+      onExhausted: (error) => {
+        onError?.(error);
+        startFallback();
+      },
+    }).then((controls) => {
+      captiveControls = controls;
+    }).catch((error) => {
+      onError?.(error instanceof Error ? error : new Error(String(error)));
+      startFallback();
+    });
+  }
+
+  return {
+    stop: async () => {
+      mode = "stopped";
+      await captiveControls?.stop();
+      if (fallbackControls) {
+        if ("stop" in fallbackControls) {
+          await Promise.resolve(fallbackControls.stop());
+        }
+      }
+    },
+    getMode: () => mode,
+    getMetrics: () => {
+      if (fallbackControls && "getMetrics" in fallbackControls) {
+        return fallbackControls.getMetrics();
+      }
+      return null;
+    },
   };
 }
