@@ -11,6 +11,7 @@ import type { RawEvent, TranslatedEvent } from "./types";
 import { translateEvent } from "./registry";
 import { db } from "@/lib/db/client";
 import { processEventForIpfs } from "@/lib/ipfs/offloader";
+import { triggerWebhooksForEvent } from "@/lib/jobs/queue";
 
 /**
  * Translates and persists a single event, offloading bloated data to IPFS.
@@ -24,7 +25,7 @@ export async function translateAndPersistEvent(
     if (translated) {
       const processed = await processEventForIpfs(rawEvent);
 
-      await db.event.upsert({
+      const savedEvent = await db.event.upsert({
         where: { id: rawEvent.id },
         update: {
           description: translated.description,
@@ -51,6 +52,13 @@ export async function translateAndPersistEvent(
           ipfsCids: processed.cids.length > 0 ? processed.cids : undefined,
         },
       });
+
+      // Trigger webhooks for the saved event
+      try {
+        await triggerWebhooksForEvent(savedEvent);
+      } catch (webhookError) {
+        console.error("[webhooks] Failed to trigger webhooks:", webhookError);
+      }
 
       translated.raw.data = processed.data;
       translated.raw.topics = processed.topics;
