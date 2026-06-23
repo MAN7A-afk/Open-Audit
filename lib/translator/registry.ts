@@ -21,6 +21,7 @@ import { createAllSacBlueprints } from "./blueprints/sac-transfer";
 import { createSacMintBurnBlueprint } from "./blueprints/sac-mint-burn";
 import { decodeEventName } from "./core";
 import { sanitizeTextField } from "./core";
+import { decodeGenericEventPayload, formatGenericValue } from "./generic-fallback-decoder";
 import { RegistryTemplateException } from "../errors";
 import { captureExceptionSync } from "../telemetry";
 import type {
@@ -131,12 +132,19 @@ export function translateEvent(
 
   if (!entry) {
     console.warn(`No translation blueprint found for contract ${event.contractId}`);
+    
+    // Try to decode the event using the generic fallback decoder
+    const genericDecoded = decodeGenericEventPayload(event);
+    const description = genericDecoded
+      ? `[Unregistered Contract] ${formatGenericValue(genericDecoded)}`
+      : `[Unknown Event: No blueprint registered for contract ${event.contractId}. Hex Data: ${event.data}]`;
+    
     return {
       raw: event,
-      description: `[Unknown Event: No blueprint registered for contract ${event.contractId}. Hex Data: ${event.data}]`,
+      description: sanitizeTextField(description, { maxLength: 512 }),
       status: "cryptic",
       // Surface the custom contract name (if any) so the UI still has context.
-      blueprintName: custom?.contractName ? sanitizeTextField(custom.contractName, { maxLength: 100 }) : null,
+      blueprintName: custom?.contractName ? sanitizeTextField(custom.contractName, { maxLength: 100 }) : "Unregistered Contract",
       eventType: null,
       schemaVersion: null,
     };

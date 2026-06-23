@@ -13,17 +13,18 @@ const UNKNOWN_EVENT: RawEvent = {
 };
 
 describe("translateEvent fallback", () => {
-  it("returns placeholder and logs a warning when blueprint is missing", () => {
+  it("returns generic decoded structure when blueprint is missing", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const translated = translateEvent(UNKNOWN_EVENT);
 
     expect(translated.status).toBe("cryptic");
     expect(translated.description).toBeTruthy();
-    expect(String(translated.description)).toContain("[Unknown Event:");
-    expect(String(translated.description)).toContain("Hex Data: 0x1234abcd");
+    expect(String(translated.description)).toContain("[Unregistered Contract]");
+    expect(translated.blueprintName).toBe("Unregistered Contract");
     expect(warnSpy).toHaveBeenCalled();
 
     warnSpy.mockRestore();
   });
 });
+
