@@ -8,6 +8,8 @@
     "dev:decoupled": "ts-node --project tsconfig.server.json server-decoupled.ts",
     "worker:indexer": "ts-node --project tsconfig.server.json src/worker/indexer.ts",
     "test:websocket": "node scripts/test-websocket-client.js",
+    "test:status": "bash scripts/test-status-api.sh",
+    "test:status:win": "cmd /c scripts\\test-status-api.bat",
     "build": "next build",
     "start": "next start",
     "start:pm2": "pm2 start ecosystem.config.js",
