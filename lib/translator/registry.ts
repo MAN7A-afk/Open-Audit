@@ -100,18 +100,7 @@ async function setCachedTranslationIfAvailable(
 }
 
 function captureTemplateError(error: RegistryTemplateException): void {
-  if (typeof window !== "undefined") {
-    console.error("[open-audit:registry]", error);
-    return;
-  }
-
-  void import("../telemetry/index")
-    .then(({ captureExceptionSync }) => {
-      captureExceptionSync(error);
-    })
-    .catch(() => {
-      console.error("[open-audit:registry]", error);
-    });
+  console.error("[open-audit:registry]", error);
 }
 
 export async function translateWithCache(

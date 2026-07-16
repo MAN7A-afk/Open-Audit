@@ -18,7 +18,6 @@ import Redis from "ioredis";
 import { startHorizonStreamingIndexer } from "../../lib/stellar/indexer";
 import { getNetworkConfig } from "../../lib/stellar/client";
 import { translateEvent } from "../../lib/translator/registry";
-import { captureExceptionSync } from "../../lib/telemetry";
 import { fetchContractEventsResilient } from "../../lib/stellar/resilient-stellar-client";
 import type { RawEvent } from "../../lib/translator/types";
 
@@ -336,7 +335,7 @@ class StellarIndexerWorker {
     } catch (error) {
       console.error(`[${WORKER_ID}] Error handling event:`, error);
       this.errorCount++;
-      captureExceptionSync(error instanceof Error ? error : new Error(String(error)));
+      console.error('[indexer.ts] Error:', error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -346,7 +345,7 @@ class StellarIndexerWorker {
   private handleError(error: Error): void {
     console.error(`[${WORKER_ID}] Indexer error:`, error.message);
     this.errorCount++;
-    captureExceptionSync(error);
+    console.error('[indexer.ts] Error:', error);
   }
 
   /**
@@ -432,13 +431,13 @@ process.on("SIGINT", async () => {
 // Handle uncaught errors
 process.on("uncaughtException", (error) => {
   console.error(`[${WORKER_ID}] Uncaught exception:`, error);
-  captureExceptionSync(error);
+  console.error('[indexer.ts] Error:', error);
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason) => {
   console.error(`[${WORKER_ID}] Unhandled rejection:`, reason);
-  captureExceptionSync(new Error(String(reason)));
+  console.error('[indexer.ts] Error:', new Error(String(reason)));
   process.exit(1);
 });
 
