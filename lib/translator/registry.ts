@@ -39,7 +39,24 @@ import type {
 type BlueprintRegistry = Map<string, ContractRegistryEntry>;
 
 /** Cache for resolved schemas to avoid repeated scans of the registry. */
+const RESOLUTION_CACHE_MAX = 1024; // bounded: evict oldest at capacity
 const RESOLUTION_CACHE: Map<string, ContractSchema> = new Map();
+
+function cacheResolvedSchema(key: string, schema: ContractSchema): void {
+  RESOLUTION_CACHE.set(key, schema);
+  if (RESOLUTION_CACHE.size > RESOLUTION_CACHE_MAX) {
+    const oldest = RESOLUTION_CACHE.keys().next().value;
+    if (oldest !== undefined) RESOLUTION_CACHE.delete(oldest);
+  }
+}
+
+export function getResolutionCacheSize(): number {
+  return RESOLUTION_CACHE.size;
+}
+
+export function getResolutionCacheMax(): number {
+  return RESOLUTION_CACHE_MAX;
+}
 
 /**
  * Interpolates a template string with values from an object.
@@ -196,6 +213,60 @@ function buildRegistry(): BlueprintRegistry {
 }
 
 /**
+ * Builds a `translate` function from a single event-mapping declaration.
+ * Called by registerUpgrade (eventMappings). Required for the module to load.
+ */
+function createTranslateFromMapping(
+  mapping: any
+): (event: RawEvent, lang: Language) => TranslationResult | null {
+  const matchNames: string[] = Array.isArray(mapping.topics) ? mapping.topics : [];
+  const topicFields: any[] = mapping.event_structure?.topics ?? [];
+  const dataField: any = mapping.event_structure?.data ?? null;
+  const template: string = mapping.english_template ?? "";
+
+  return (event: RawEvent, _lang: Language): TranslationResult | null => {
+    const eventName = decodeEventName(event.topics[0] ?? "");
+    if (matchNames.length > 0 && !matchNames.includes(eventName)) return null;
+
+    const params: Record<string, string> = {};
+    topicFields.forEach((field: any, idx: number) => {
+      const hex = event.topics[idx + 1] ?? "";
+      const decoded = decodeField(hex, field.type);
+      params[field.name] = decoded.full;
+      params[`${field.name}.short`] = decoded.short;
+    });
+    if (dataField) {
+      const decoded = decodeField(event.data ?? "", dataField.type);
+      params[dataField.name] = decoded.full;
+      params[`${dataField.name}.short`] = decoded.short;
+    }
+
+    const description = interpolateTemplate(template, params);
+    if (!description) return null;
+    return { description, eventType: matchNames[0] ?? eventName };
+  };
+}
+
+function decodeField(hex: string, type: string): { full: string; short: string } {
+  switch (type) {
+    case "address": {
+      const addr = decodeAddress(hex);
+      return { full: addr.publicKey, short: addr.short };
+    }
+    case "i128":
+    case "i64":
+    case "u64":
+    case "u128":
+    case "amount": {
+      const amt = decodeAmount(hex);
+      return { full: `${amt.formatted} ${amt.symbol}`.trim(), short: amt.formatted };
+    }
+    default:
+      return { full: hex, short: hex.slice(0, 10) };
+  }
+}
+
+/**
  * Dynamically registers a new schema for a contract.
  * Useful for handling contract upgrades (update_current_contract_wasm) at runtime.
  */
@@ -246,7 +317,7 @@ const REGISTRY: BlueprintRegistry = buildRegistry();
 /**
  * Resolves the correct schema version for a given contract and ledger.
  */
-function resolveSchema(
+export function resolveSchema(
   contractId: string,
   ledger: number,
   customBlueprints?: Map<string, TranslationBlueprint>
@@ -279,7 +350,7 @@ function resolveSchema(
   );
 
   if (schema) {
-    RESOLUTION_CACHE.set(cacheKey, schema);
+    cacheResolvedSchema(cacheKey, schema);
     return schema;
   }
 
@@ -310,13 +381,29 @@ export function translateEvent(
       description: sanitizeTextField(description, { maxLength: 512 }),
       status: "cryptic",
       // Surface the custom contract name (if any) so the UI still has context.
-      blueprintName: customBlueprints?.get(event.contractId)?.contractName ? sanitizeTextField(customBlueprints.get(event.contractId)!.contractName, { maxLength: 100 }) : "Unregistered Contract",
+      blueprintName: customBlueprints?.get(event.contractId)?.contractName
+        ? sanitizeTextField(customBlueprints.get(event.contractId)!.contractName, { maxLength: 100 })
+        : "Unregistered Contract",
       eventType: null,
       schemaVersion: null,
     };
   }
 
-  const translated = applyBlueprint(event, schema.blueprint, lang);
+  const blueprint = schema.blueprint;
+
+  if (!blueprint) {
+    console.warn(`No translation blueprint applicable for contract ${event.contractId} at ledger ${event.ledger}`);
+    return {
+      raw: event,
+      description: `[Unknown Event: No blueprint applicable for contract ${event.contractId} at ledger ${event.ledger}. Hex Data: ${event.data}]`,
+      status: "cryptic",
+      blueprintName: schema.blueprint.contractName,
+      eventType: null,
+      schemaVersion: null,
+    };
+  }
+
+  const translated = applyBlueprint(event, blueprint, lang);
   if (translated) return translated;
 
   return {
@@ -481,20 +568,34 @@ export function getBlueprintCount(): number {
  */
 export function registerBlueprint(...blueprints: TranslationBlueprint[]): void {
   for (const blueprint of blueprints) {
+    const schema: ContractSchema = {
+      version: "1.0.0",
+      validFromLedger: blueprint.validFromLedger ?? 1,
+      validToLedger: null,
+      blueprint,
+    };
     const existing = REGISTRY.get(blueprint.contractId);
     if (!existing) {
-      REGISTRY.set(blueprint.contractId, blueprint);
+      const entry: ContractRegistryEntry = {
+        contractId: blueprint.contractId,
+        contractName: blueprint.contractName,
+        schemas: [schema],
+      };
+      REGISTRY.set(blueprint.contractId, entry);
       continue;
     }
 
-    const merged: VersionedTranslationBlueprint[] = Array.isArray(existing)
-      ? [...existing]
-      : [{ ...existing } as VersionedTranslationBlueprint];
-
-    merged.push(blueprint as VersionedTranslationBlueprint);
-    REGISTRY.set(
-      blueprint.contractId,
-      merged.sort((a, b) => (b.validFromLedger ?? 0) - (a.validFromLedger ?? 0))
+    // Merge into existing entry's schemas list, keeping ledger-order.
+    const entry = Array.isArray(existing)
+      ? (existing[0] as unknown as ContractRegistryEntry)
+      : (existing as ContractRegistryEntry);
+    const mergedSchemas = [...(entry.schemas ?? []), schema].sort(
+      (a, b) => (a.validFromLedger ?? 0) - (b.validFromLedger ?? 0)
     );
+    REGISTRY.set(blueprint.contractId, {
+      contractId: blueprint.contractId,
+      contractName: blueprint.contractName,
+      schemas: mergedSchemas,
+    });
   }
 }
