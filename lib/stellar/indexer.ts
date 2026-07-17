@@ -14,7 +14,6 @@ import {
   isRedisEnabled,
 } from "../cache/redisCache";
 import { StellarNetworkException, XdrParsingException } from "../errors";
-import { captureExceptionSync } from "../telemetry/index";
 import { createIngestionPool, DEFAULT_WORKER_COUNT, type IngestionPoolMetrics } from "./ingestion-pool";
 import type { StellarNetworkConfig } from "./client";
 import type { RawEvent } from "../translator/types";
@@ -434,9 +433,7 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
                 { cause: error, retriable: willRetry }
               );
 
-        captureExceptionSync(err, {
-          context: { contractId: contractIds[0], ledgerSequence: cursor.lastLedger },
-        });
+        console.error('[indexer.ts] Error:', err);
 
         if (onError) {
           onError(err, willRetry);
@@ -582,7 +579,7 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
         },
         err
       );
-      captureExceptionSync(xdrError);
+      console.error('[indexer.ts] Error:', xdrError);
       if (onError) onError(xdrError);
     },
   });
@@ -684,7 +681,7 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
                 },
                 err
               );
-              captureExceptionSync(xdrError);
+              console.error('[indexer.ts] Error:', xdrError);
               if (onError) onError(xdrError);
             }
           },
@@ -694,7 +691,7 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
               { operation: "horizonStream" },
               { retriable: true, cause: err }
             );
-            captureExceptionSync(networkError);
+            console.error('[indexer.ts] Error:', networkError);
             if (onError) onError(networkError);
 
             // Auto-reconnect logic
@@ -710,7 +707,7 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
         { operation: "startHorizonStream" },
         { retriable: true, cause: err }
       );
-      captureExceptionSync(networkError);
+      console.error('[indexer.ts] Error:', networkError);
       if (onError) onError(networkError);
       if (isRunning) {
         setTimeout(startStream, 5000);

@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { AlertCircle, BookOpen, ArrowRight, Radio, PauseCircle, PlayCircle, Upload, FileJson, Trash2 } from "lucide-react";
-import { SearchBar } from "@/components/dashboard/SearchBar";
 import {
   AlertCircle,
   BookOpen,
@@ -16,6 +14,7 @@ import {
   Download,
   Star,
 } from "lucide-react";
+import { SearchBar } from "@/components/dashboard/SearchBar";
 import { FilterBuilder } from "@/components/dashboard/FilterBuilder";
 import { EventFeedTable } from "@/components/dashboard/EventFeedTable";
 import { StatsBar } from "@/components/dashboard/StatsBar";
@@ -28,33 +27,30 @@ import { useLanguage } from "@/lib/hooks/useLanguage";
 import { useNetwork } from "@/lib/hooks/useNetwork";
 import { useDashboardPrefs } from "@/lib/hooks/useDashboardPrefs";
 import { useEventFilters } from "@/lib/hooks/useEventFilters";
-import { getMockEventsForContract, MOCK_RAW_EVENTS } from "@/lib/mock-data";
+import { MOCK_RAW_EVENTS } from "@/lib/mock-data";
 import {
   buildCustomBlueprints,
   loadCustomAbis,
   removeCustomAbi,
   saveCustomAbi,
 } from "@/lib/translator/custom-abi";
-import { getMockEventsForContract, MOCK_RAW_EVENTS } from "@/lib/mock-data";
-import { useLiveFeed } from "@/lib/hooks/useLiveFeed";
-import type { TranslatedEvent } from "@/lib/translator/types";
-import type { RawEvent, CustomAbi } from "@/lib/translator/types";
-import { translateEvents } from "@/lib/translator/registry";
 import type { TranslatedEvent, RawEvent, CustomAbi } from "@/lib/translator/types";
+import { translateEvents } from "@/lib/translator/registry";
 
 function simulateNetworkDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function DashboardClient(): React.JSX.Element {
-  const [rawEvents, setRawEvents] = useState<RawEvent[]>(MOCK_RAW_EVENTS);
+  const [rawEvents] = useState<RawEvent[]>(MOCK_RAW_EVENTS);
   const [liveEvents, setLiveEvents] = useState<TranslatedEvent[]>([]);
   const [customAbis, setCustomAbis] = useState<CustomAbi[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
-  const [liveEvents, setLiveEvents] = useState<TranslatedEvent[]>([]);
+  const [searchValue, setSearchValue] = useState("");
+  const [searchedContract, setSearchedContract] = useState<string | null>(null);
 
   const { language } = useLanguage();
   const { network } = useNetwork();
@@ -87,9 +83,6 @@ export function DashboardClient(): React.JSX.Element {
     [liveEvents, translatedRawEvents]
   );
 
-  const handleNewEvent = useCallback((event: TranslatedEvent) => {
-    setLiveEvents((prev) => [event, ...prev]);
-  }, []);
   const translatedEvents = useMemo(
     () => translateEvents(rawEvents, customBlueprints, language),
     [rawEvents, customBlueprints, language]
@@ -141,6 +134,16 @@ export function DashboardClient(): React.JSX.Element {
       setLiveEvents((prev) => [event, ...prev]);
     },
     [filters.contractId]
+  );
+
+  const handleSearch = useCallback(
+    function (contractId: string): void {
+      const normalized = contractId.trim();
+      setSearchValue(normalized);
+      setSearchedContract(normalized || null);
+      setFilters({ contractId: normalized });
+    },
+    [setFilters]
   );
 
   const { isLive, isPaused, newEventIds, toggleLive, togglePause } =

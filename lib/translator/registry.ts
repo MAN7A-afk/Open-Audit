@@ -23,8 +23,6 @@ import { decodeEventName } from "./core";
 import { sanitizeTextField } from "./core";
 import { decodeGenericEventPayload, formatGenericValue } from "./generic-fallback-decoder";
 import { RegistryTemplateException } from "../errors";
-import { captureExceptionSync } from "../telemetry";
-import { getCachedTranslation, setCachedTranslation, isRedisEnabled } from "../cache/redisCache";
 import type {
   EventMatchCriteria,
   RawEvent,
@@ -47,8 +45,6 @@ const RESOLUTION_CACHE: Map<string, ContractSchema> = new Map();
  * Interpolates a template string with values from an object.
  * e.g. "Hello {name}" + { name: "World" } -> "Hello World"
  */
-type BlueprintRegistry = Map<string, TranslationBlueprint | VersionedTranslationBlueprint[]>;
-
 export type PersistedRawEvent = RawEvent & Partial<Pick<TranslatedEvent, "description" | "status" | "blueprintName" | "eventType" | "schemaVersion">>;
 
 function hasPersistedTranslation(event: PersistedRawEvent): boolean {
@@ -72,13 +68,48 @@ function buildTranslationFromPersisted(event: PersistedRawEvent): TranslatedEven
   };
 }
 
+async function getCachedTranslationIfAvailable(
+  event: Pick<RawEvent, "txHash" | "id">
+): Promise<TranslatedEvent | null> {
+  if (typeof window !== "undefined") {
+    return null;
+  }
+
+  const { getCachedTranslation, isRedisEnabled } = await import("../cache/redisCache");
+  if (!isRedisEnabled()) {
+    return null;
+  }
+
+  return getCachedTranslation(event);
+}
+
+async function setCachedTranslationIfAvailable(
+  event: Pick<RawEvent, "txHash" | "id">,
+  translated: TranslatedEvent
+): Promise<void> {
+  if (typeof window !== "undefined") {
+    return;
+  }
+
+  const { setCachedTranslation, isRedisEnabled } = await import("../cache/redisCache");
+  if (!isRedisEnabled()) {
+    return;
+  }
+
+  await setCachedTranslation(event, translated);
+}
+
+function captureTemplateError(error: RegistryTemplateException): void {
+  console.error("[open-audit:registry]", error);
+}
+
 export async function translateWithCache(
   event: PersistedRawEvent,
   customBlueprints?: Map<string, TranslationBlueprint>,
   lang: Language = "en"
 ): Promise<TranslatedEvent> {
-  if (event.txHash && event.id && isRedisEnabled()) {
-    const cached = await getCachedTranslation(event);
+  if (event.txHash && event.id) {
+    const cached = await getCachedTranslationIfAvailable(event);
     if (cached) return cached;
   }
 
@@ -87,8 +118,8 @@ export async function translateWithCache(
       ? buildTranslationFromPersisted(event)
       : translateEvent(event, customBlueprints, lang);
 
-  if (event.txHash && event.id && isRedisEnabled()) {
-    await setCachedTranslation(event, translated);
+  if (event.txHash && event.id) {
+    await setCachedTranslationIfAvailable(event, translated);
   }
 
   return translated;
@@ -141,12 +172,21 @@ function buildRegistry(): BlueprintRegistry {
     const mintBurnBlueprint = createSacMintBurnBlueprint(contractId);
     const existing = registry.get(contractId);
     if (existing) {
-      const existingBlueprint = Array.isArray(existing) ? existing[0] : existing;
-      const originalTranslate = existingBlueprint.translate.bind(existingBlueprint);
-      registry.set(contractId, {
-        ...mintBurnBlueprint,
-        translate: (event, lang) => originalTranslate(event, lang) ?? mintBurnBlueprint.translate(event, lang),
-      });
+      const existingBlueprint = existing.schemas?.[0]?.blueprint;
+      if (existingBlueprint) {
+        const wrappedBlueprint: TranslationBlueprint = {
+          contractId: existingBlueprint.contractId,
+          contractName: existingBlueprint.contractName,
+          matches: existingBlueprint.matches,
+          translate: (event, lang) => {
+            const originalResult = existingBlueprint.translate(event, lang);
+            if (originalResult) return originalResult;
+            return mintBurnBlueprint.translate(event, lang);
+          },
+        };
+        // Replace the existing schema's blueprint
+        existing.schemas[0].blueprint = wrappedBlueprint;
+      }
     } else {
       register(mintBurnBlueprint);
     }
@@ -256,7 +296,7 @@ export function translateEvent(
 ): TranslatedEvent {
   const schema = resolveSchema(event.contractId, event.ledger, customBlueprints);
 
-  if (!entry) {
+  if (!schema) {
     console.warn(`No translation blueprint found for contract ${event.contractId}`);
     
     // Try to decode the event using the generic fallback decoder
@@ -270,29 +310,13 @@ export function translateEvent(
       description: sanitizeTextField(description, { maxLength: 512 }),
       status: "cryptic",
       // Surface the custom contract name (if any) so the UI still has context.
-      blueprintName: custom?.contractName ? sanitizeTextField(custom.contractName, { maxLength: 100 }) : "Unregistered Contract",
+      blueprintName: customBlueprints?.get(event.contractId)?.contractName ? sanitizeTextField(customBlueprints.get(event.contractId)!.contractName, { maxLength: 100 }) : "Unregistered Contract",
       eventType: null,
       schemaVersion: null,
     };
   }
 
-  const blueprint = Array.isArray(entry)
-    ? resolveBlueprint(entry, event.ledger)
-    : entry;
-
-  if (!blueprint) {
-    console.warn(`No translation blueprint applicable for contract ${event.contractId} at ledger ${event.ledger}`);
-    return {
-      raw: event,
-      description: `[Unknown Event: No blueprint applicable for contract ${event.contractId} at ledger ${event.ledger}. Hex Data: ${event.data}]`,
-      status: "cryptic",
-      blueprintName: Array.isArray(entry) ? entry[0].contractName : entry.contractName,
-      eventType: null,
-      schemaVersion: null,
-    };
-  }
-
-  const translated = applyBlueprint(event, blueprint, lang);
+  const translated = applyBlueprint(event, schema.blueprint, lang);
   if (translated) return translated;
 
   return {
@@ -415,7 +439,7 @@ function translateEventSafe(
       },
       error
     );
-    captureExceptionSync(templateError);
+    captureTemplateError(templateError);
 
     return {
       raw: event,

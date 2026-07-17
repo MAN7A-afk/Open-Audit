@@ -19,10 +19,6 @@ vi.mock("../../cache/redisCache", () => ({
   isRedisEnabled: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("../../telemetry/index", () => ({
-  captureExceptionSync: vi.fn(),
-}));
-
 vi.mock("stellar-sdk", () => ({
   SorobanRpc: {
     Server: vi.fn(),

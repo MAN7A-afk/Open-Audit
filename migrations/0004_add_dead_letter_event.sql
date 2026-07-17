@@ -1,4 +1,4 @@
--- Migration: 0003_add_dead_letter_event
+-- Migration: 0004_add_dead_letter_event
 -- Adds the DeadLetterEvent table for unparseable Soroban events.
 
 BEGIN;

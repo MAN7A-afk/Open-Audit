@@ -45,7 +45,7 @@ import { translateEvent } from "./lib/translator/registry";
 import { processEventForIpfs } from "./lib/ipfs/offloader";
 import { createFileIngestionStateStore, startResilientEventIngestion } from "./lib/stellar/indexer";
 import { getNetworkConfig } from "./lib/stellar/client";
-import { captureExceptionSync, eventsIngestedTotal, metricsHandler, recordTranslationDuration, startTelemetry } from "./lib/telemetry";
+import { eventsIngestedTotal, metricsHandler, recordTranslationDuration, startTelemetry } from "./lib/metrics";
 import { startRetentionScheduler } from "./lib/retention/scheduler";
 
 const dev = process.env.NODE_ENV !== "production";
@@ -172,7 +172,7 @@ app.prepare().then(async () => {
       broadcast(translated);
     },
     onError: (err) => {
-      captureExceptionSync(err, { context: { operation: "resilientStreamingIndexer" } });
+      console.error('[server.ts] Error:', err);
       console.error("[Indexer] Streaming error:", err);
     },
   });
