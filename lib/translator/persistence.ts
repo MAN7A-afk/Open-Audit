@@ -1,16 +1,14 @@
 /**
- * Event Translator with Database Persistence and IPFS Offloading
+ * Event Translator with Database Persistence
  *
  * This module handles the translation of raw events into human-readable
- * descriptions and saves them to the database. During persistence, bloated
- * metadata strings (>2KB) inside raw events are automatically offloaded to
- * a local IPFS node and replaced with lightweight CID pointers.
+ * descriptions and saves them to the database.
  */
+
 
 import type { RawEvent, TranslatedEvent } from "./types";
 import { translateWithCache } from "./registry";
 import { db } from "../db/client";
-import { processEventForIpfs } from "../ipfs/offloader";
 import { triggerWebhooksForEvent } from "../jobs/queue";
 import { OpenAuditError } from "../errors";
 import { setCachedTranslation, isRedisEnabled } from "../cache/redisCache";
@@ -75,8 +73,6 @@ export async function translateAndPersistEvent(
   }
 
   try {
-    const processed = await processEventForIpfs(rawEvent);
-
     const savedEvent = await db.event.upsert({
       where: { id: rawEvent.id },
       update: {
@@ -84,9 +80,6 @@ export async function translateAndPersistEvent(
         status: translated.status,
         blueprintName: translated.blueprintName,
         eventType: translated.eventType,
-        data: processed.data,
-        topics: processed.topics,
-        ipfsCids: processed.cids.length > 0 ? processed.cids : undefined,
         updatedAt: new Date(),
       },
       create: {
@@ -95,13 +88,12 @@ export async function translateAndPersistEvent(
         ledger: rawEvent.ledger,
         timestamp: rawEvent.timestamp,
         txHash: rawEvent.txHash,
-        topics: processed.topics,
-        data: processed.data,
+        topics: rawEvent.topics,
+        data: rawEvent.data,
         description: translated.description,
         status: translated.status,
         blueprintName: translated.blueprintName,
         eventType: translated.eventType,
-        ipfsCids: processed.cids.length > 0 ? processed.cids : undefined,
       },
     });
 
@@ -111,9 +103,6 @@ export async function translateAndPersistEvent(
     } catch (webhookError) {
       console.error("[webhooks] Failed to trigger webhooks:", webhookError);
     }
-
-    translated.raw.data = processed.data;
-    translated.raw.topics = processed.topics;
 
     if (isRedisEnabled()) {
       await setCachedTranslation(rawEvent, translated);
@@ -157,39 +146,4 @@ export async function translateAndPersistBatch(rawEvents: RawEvent[]): Promise<{
   }
 
   return { successful, failed, translated };
-}
-
-/**
- * Mark events as verified by RPC
- */
-export async function markEventsAsVerified(ledger: number): Promise<number> {
-  const result = await db.event.updateMany({
-    where: { ledger },
-    data: {
-      rpcVerified: true,
-      lastRpcCheck: new Date(),
-    },
-  });
-
-  return result.count;
-}
-
-/**
- * Record discrepancies found during reconciliation
- */
-export async function recordEventDiscrepancy(
-  eventId: string,
-  issue: string,
-  action: string
-): Promise<void> {
-  await db.event.update({
-    where: { id: eventId },
-    data: {
-      discrepancies: JSON.stringify({
-        issue,
-        action,
-        timestamp: new Date().toISOString(),
-      }),
-    },
-  });
 }

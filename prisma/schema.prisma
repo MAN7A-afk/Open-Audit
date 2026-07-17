@@ -16,18 +16,12 @@ model Event {
   ledger          Int
   timestamp       Int
   txHash          String
-  topics          Json     // Store as JSON array (may contain "ipfs:<cid>" pointers)
-  data            String   // Hex data (may contain "ipfs:<cid>" pointer if >2KB)
+  topics          Json     // Store as JSON array
+  data            String   // Hex-encoded event data
   description     String?  // Translated human-readable text
   status          String   // "translated" | "cryptic"
   blueprintName   String?  // Contract name from blueprint
   eventType       String?  // Event type (transfer, mint, burn, etc.)
-  ipfsCids        Json?    // Array of IPFS CIDs offloaded for this event
-
-  // Reconciliation fields
-  rpcVerified     Boolean  @default(false)
-  lastRpcCheck    DateTime?
-  discrepancies   String?  // JSON array of issues
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
