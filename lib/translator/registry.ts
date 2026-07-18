@@ -19,6 +19,7 @@
 
 import { createAllSacBlueprints } from "./blueprints/sac-transfer";
 import { createSacMintBurnBlueprint } from "./blueprints/sac-mint-burn";
+import { createAllSdexBlueprints } from "./blueprints/sdex-orderbook";
 import { decodeEventName } from "./core";
 import { sanitizeTextField } from "./core";
 import { decodeGenericEventPayload, formatGenericValue } from "./generic-fallback-decoder";
@@ -190,6 +191,11 @@ function buildRegistry(): BlueprintRegistry {
     } else {
       register(mintBurnBlueprint);
     }
+  }
+
+  // 3. Load SDEX (Stellar Classic Order Book) Blueprints
+  for (const blueprint of createAllSdexBlueprints()) {
+    register(blueprint);
   }
 
   return registry;

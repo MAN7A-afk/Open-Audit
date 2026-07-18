@@ -12,4 +12,17 @@ export const ES_TRANSLATIONS = {
       Burn: "Quema",
     },
   },
+  sdex: {
+    manageBuyOffer: (seller: string, amount: string, buyingAsset: string, sellingAsset: string) =>
+      `La cuenta [${seller}] colocó una oferta de compra por ${amount} del activo [${buyingAsset}], ofreciendo el activo [${sellingAsset}]`,
+    manageSellOffer: (seller: string, amount: string, sellingAsset: string, buyingAsset: string) =>
+      `La cuenta [${seller}] colocó una oferta de venta por ${amount} del activo [${sellingAsset}], solicitando el activo [${buyingAsset}]`,
+    offerFilled: (seller: string, amount: string, assetSold: string, buyer: string) =>
+      `La oferta de [${seller}] fue completada: ${amount} del activo [${assetSold}] fue vendido a [${buyer}]`,
+    eventTypes: {
+      ManageBuyOffer: "Gestionar Oferta de Compra",
+      ManageSellOffer: "Gestionar Oferta de Venta",
+      OfferFilled: "Oferta Completada",
+    },
+  },
 };

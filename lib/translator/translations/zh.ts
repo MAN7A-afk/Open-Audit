@@ -12,4 +12,17 @@ export const ZH_TRANSLATIONS = {
       Burn: "销毁",
     },
   },
+  sdex: {
+    manageBuyOffer: (seller: string, amount: string, buyingAsset: string, sellingAsset: string) =>
+      `账户 [${seller}] 发起了一笔买入报价，买入资产 [${buyingAsset}] 共 ${amount}，出售资产 [${sellingAsset}]`,
+    manageSellOffer: (seller: string, amount: string, sellingAsset: string, buyingAsset: string) =>
+      `账户 [${seller}] 发起了一笔卖出报价，卖出资产 [${sellingAsset}] 共 ${amount}，换取资产 [${buyingAsset}]`,
+    offerFilled: (seller: string, amount: string, assetSold: string, buyer: string) =>
+      `[${seller}] 的报价已成交：${amount} 的资产 [${assetSold}] 已卖给 [${buyer}]`,
+    eventTypes: {
+      ManageBuyOffer: "管理买入报价",
+      ManageSellOffer: "管理卖出报价",
+      OfferFilled: "报价成交",
+    },
+  },
 };
