@@ -20,7 +20,7 @@ export const FR_TRANSLATIONS = {
     offerFilled: (seller: string, amount: string, assetSold: string, buyer: string) =>
       `L'offre de [${seller}] a été exécutée : ${amount} de l'actif [${assetSold}] a été vendu à [${buyer}]`,
     eventTypes: {
-      ManageBuyOffer: "Gestion Offre d'Achat",
+      ManageBuyOffer: "Gestion Offre Achat",
       ManageSellOffer: "Gestion Offre de Vente",
       OfferFilled: "Offre Exécutée",
     },
