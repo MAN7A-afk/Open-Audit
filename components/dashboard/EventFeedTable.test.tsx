@@ -13,12 +13,6 @@ vi.mock("react-syntax-highlighter", () => ({
   Prism: () => <div data-testid="mock-syntax-highlighter" />,
 }));
 
-vi.mock("@/components/dag/DagPanel", () => ({
-  DagPanel: ({ txHash }: { txHash: string | null }) => (
-    <div data-testid="mock-dag-panel" data-tx={txHash} />
-  ),
-}));
-
 vi.mock("./EventDetailsModal", () => ({
   EventDetailsModal: ({
     open,
@@ -496,15 +490,6 @@ describe("EventFeedTable – action buttons", () => {
     );
 
     expect(screen.getByTestId("mock-contribute-dialog")).toBeInTheDocument();
-  });
-
-  it("renders a Call Tree button when txHash is present", () => {
-    renderTable({ events: [translatedEvent] });
-    expect(
-      screen.getByRole("button", {
-        name: /view execution call tree for tx txhash-translated-001/i,
-      })
-    ).toBeInTheDocument();
   });
 });
 
