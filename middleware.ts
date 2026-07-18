@@ -18,7 +18,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   if (!isProtected) return NextResponse.next();
 
   const rawKey = request.headers.get("x-api-key") ?? "";
-  const record = validateApiKey(rawKey);
+  const record = await validateApiKey(rawKey);
 
   if (!record) {
     return NextResponse.json(
