@@ -281,22 +281,11 @@ export function decodeMap(hex: string): DecodedMap {
       key: { type: "String", value: "key1", hex: "0x... " },
       value: { type: "String", value: "value1", hex: "0x... " },
     });
-    
+
     return {
       type: "Map",
       entries,
       summary: `Map with ${entries.length} ${entries.length === 1 ? "entry" : "entries"}`,
-    };
-    
-  } catch (error) {
-    // Graceful error handling - never crash
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Failed to decode map from hex ${truncateHex(hex)}:`, message);
-    
-    return {
-      type: "Map",
-      entries: [],
-      summary: `Error parsing map: ${message.slice(0, 50)}`,
     };
   }
   return { type: "Map", entries, summary: `Map with ${entries.length} entries` };
