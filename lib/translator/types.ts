@@ -77,6 +77,31 @@ export interface TranslationBlueprint {
   translate: (event: RawEvent, lang: Language) => TranslationResult | null;
 }
 
+/**
+ * A versioned schema for a contract, valid for a specific ledger range.
+ */
+export interface ContractSchema {
+  /** Semantic version of this schema (e.g., "1.0.0"). */
+  version: string;
+  /** The ledger sequence this schema becomes valid from. */
+  validFromLedger: number;
+  /** The ledger sequence this schema is valid until (inclusive). Null means current. */
+  validToLedger: number | null;
+  /** The actual translation logic for this version. */
+  blueprint: TranslationBlueprint;
+  /** Optional metadata about this version (e.g. WASM hash, upgrade tx). */
+  metadata?: Record<string, any>;
+}
+
+/**
+ * The entry in the registry for a single contract, containing all its historical versions.
+ */
+export interface ContractRegistryEntry {
+  contractId: string;
+  contractName: string;
+  schemas: ContractSchema[];
+}
+
 /** A single topic condition within a multi-topic match. */
 export interface TopicCriterion {
   /** Ordered topic index to inspect. */

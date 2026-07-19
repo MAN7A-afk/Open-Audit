@@ -1,4 +1,5 @@
 import { CheckCircle2, HelpCircle, BookOpen, Zap } from "lucide-react";
+import { useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { getBlueprintCount } from "@/lib/translator/registry";
 import type { TranslatedEvent } from "@/lib/translator/types";
@@ -46,6 +47,26 @@ function SkeletonStatCard(): React.JSX.Element {
 }
 
 export function StatsBar({ events, isLoading = false }: StatsBarProps): React.JSX.Element {
+  const { translated, cryptic, translationRate, blueprintCount } = useMemo(
+    function () {
+      const translated = events.filter(function (e) {
+        return e.status === "translated";
+      }).length;
+
+      const cryptic = events.filter(function (e) {
+        return e.status === "cryptic";
+      }).length;
+
+      const translationRate =
+        events.length > 0 ? Math.round((translated / events.length) * 100) : 0;
+
+      const blueprintCount = getBlueprintCount();
+
+      return { translated, cryptic, translationRate, blueprintCount };
+    },
+    [events]
+  );
+
   if (isLoading) {
     return (
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -55,18 +76,6 @@ export function StatsBar({ events, isLoading = false }: StatsBarProps): React.JS
       </div>
     );
   }
-  const translated = events.filter(function (e) {
-    return e.status === "translated";
-  }).length;
-
-  const cryptic = events.filter(function (e) {
-    return e.status === "cryptic";
-  }).length;
-
-  const translationRate =
-    events.length > 0 ? Math.round((translated / events.length) * 100) : 0;
-
-  const blueprintCount = getBlueprintCount();
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
