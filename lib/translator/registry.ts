@@ -20,8 +20,13 @@
 import { createAllSacBlueprints } from "./blueprints/sac-transfer";
 import { createSacMintBurnBlueprint } from "./blueprints/sac-mint-burn";
 import { createAllSdexBlueprints } from "./blueprints/sdex-orderbook";
-import { decodeEventName } from "./core";
-import { sanitizeTextField } from "./core";
+import {
+  decodeEventName,
+  sanitizeTextField,
+  decodeAddress,
+  decodeAmount,
+  interpolateTemplate,
+} from "./core";
 import { decodeGenericEventPayload, formatGenericValue } from "./generic-fallback-decoder";
 import { RegistryTemplateException } from "../errors";
 import type {
