@@ -15,6 +15,7 @@ import {
   Download,
   Star,
 } from "lucide-react";
+import { SearchBar } from "@/components/dashboard/SearchBar";
 import { FilterBuilder } from "@/components/dashboard/FilterBuilder";
 import { EventFeedTable } from "@/components/dashboard/EventFeedTable";
 import { StatsBar } from "@/components/dashboard/StatsBar";
@@ -27,28 +28,26 @@ import { useLanguage } from "@/lib/hooks/useLanguage";
 import { useNetwork } from "@/lib/hooks/useNetwork";
 import { useDashboardPrefs } from "@/lib/hooks/useDashboardPrefs";
 import { useEventFilters } from "@/lib/hooks/useEventFilters";
-import {
-  getMockEventsForContract,
-  MOCK_RAW_EVENTS,
-  USE_MOCK_DATA,
-} from "@/lib/mock-data";
+import { MOCK_RAW_EVENTS } from "@/lib/mock-data";
 import {
   buildCustomBlueprints,
   loadCustomAbis,
   removeCustomAbi,
   saveCustomAbi,
 } from "@/lib/translator/custom-abi";
-import { translateEvents } from "@/lib/translator/registry";
 import type { TranslatedEvent, RawEvent, CustomAbi } from "@/lib/translator/types";
+import { translateEvents } from "@/lib/translator/registry";
 
 export function DashboardClient(): React.JSX.Element {
-  const [rawEvents, setRawEvents] = useState<RawEvent[]>([]);
+  const [rawEvents] = useState<RawEvent[]>(MOCK_RAW_EVENTS);
+  const [liveEvents, setLiveEvents] = useState<TranslatedEvent[]>([]);
   const [customAbis, setCustomAbis] = useState<CustomAbi[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
-  const [liveEvents, setLiveEvents] = useState<TranslatedEvent[]>([]);
+  const [searchValue, setSearchValue] = useState("");
+  const [searchedContract, setSearchedContract] = useState<string | null>(null);
 
   const { language } = useLanguage();
   const { network } = useNetwork();
@@ -91,6 +90,23 @@ export function DashboardClient(): React.JSX.Element {
   const customBlueprints = useMemo(
     () => buildCustomBlueprints(customAbis),
     [customAbis]
+  );
+
+  // Derive translations from the raw events + current custom blueprints so the
+  // feed re-translates instantly when an ABI is uploaded or removed.
+  const translatedRawEvents = useMemo(
+    function () {
+      return translateEvents(rawEvents, customBlueprints);
+    },
+    [rawEvents, customBlueprints]
+  );
+
+  // Merge live-streamed events (prepended) with the translated batch.
+  const events = useMemo(
+    function () {
+      return [...liveEvents, ...translatedRawEvents];
+    },
+    [liveEvents, translatedRawEvents]
   );
 
   const translatedEvents = useMemo(
@@ -154,6 +170,16 @@ export function DashboardClient(): React.JSX.Element {
       setLiveEvents((prev) => [event, ...prev]);
     },
     [filters.contractId]
+  );
+
+  const handleSearch = useCallback(
+    function (contractId: string): void {
+      const normalized = contractId.trim();
+      setSearchValue(normalized);
+      setSearchedContract(normalized || null);
+      setFilters({ contractId: normalized });
+    },
+    [setFilters]
   );
 
   const { isLive, isPaused, newEventIds, toggleLive, togglePause } =

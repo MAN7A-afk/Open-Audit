@@ -1,7 +1,7 @@
 "use client";
 
 import { Code, ExternalLink, Copy, Check, Loader2, AlertCircle } from "lucide-react";
-import { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -31,13 +31,32 @@ interface RawDataDialogProps {
 function CopyButton({ text }: { text: string }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const { toast } = useToast();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function handleCopy(): Promise<void> {
     await navigator.clipboard.writeText(text);
     setCopied(true);
     toast({ description: "Copied!" });
-    setTimeout(() => setCopied(false), 2000);
+    
+    // Clear any existing timeout to prevent memory leaks
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    
+    timeoutRef.current = setTimeout(() => {
+      setCopied(false);
+      timeoutRef.current = null;
+    }, 2000);
   }
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <TooltipProvider>
@@ -46,10 +65,14 @@ function CopyButton({ text }: { text: string }): React.JSX.Element {
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7"
+            className="h-7 w-7 relative"
             onClick={handleCopy}
+            aria-label="Copy to clipboard"
           >
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            <span aria-live="polite" className="sr-only">
+              {copied ? "Copied" : ""}
+            </span>
+            {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
           </Button>
         </TooltipTrigger>
         <TooltipContent>Copy to clipboard</TooltipContent>
