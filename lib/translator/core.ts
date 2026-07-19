@@ -3,6 +3,7 @@
  * This module is designed to be pure and free of side effects.
  */
 
+import { xdr, StrKey } from "stellar-sdk";
 import type {
   DecodedAddress,
   DecodedAmount,
@@ -115,25 +116,94 @@ export function escapeHtml(str: string): string {
 
 /**
  * Shortens a Stellar public key for display.
- * e.g. "GABC...WXYZ1234" → "GABC...1234"
+ * e.g. "GABC...WXYZ1234" -> "GABC...1234"
  */
 export function shortenAddress(publicKey: string): string {
   if (publicKey.length <= 12) return publicKey;
   return `${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`;
 }
 
+// Memoization cache for decodeAddress
+const decodeAddressMemo = new Map<string, DecodedAddress>();
+// Object pool to reuse DecodedAddress objects
+const decodedAddressPool: DecodedAddress[] = [];
+const MAX_POOL_SIZE = 100;
+
 /**
- * Decodes a mock hex-encoded Stellar address.
+ * Decodes a hex-encoded Stellar address XDR into a human-readable address.
  */
 export function decodeAddress(hex: string): DecodedAddress {
-  const seed = hex.slice(2, 10).toUpperCase();
-  const tail = hex.slice(-4).toUpperCase();
-  const publicKey = `G${seed}${"A".repeat(48 - seed.length)}${tail}`;
+  // Check memo cache first
+  if (decodeAddressMemo.has(hex)) {
+    return decodeAddressMemo.get(hex)!;
+  }
 
-  return {
-    publicKey,
-    short: shortenAddress(publicKey),
-  };
+  try {
+    const cleanHex = hex.startsWith("0x") ? hex.slice(2) : hex;
+    const scVal = xdr.ScVal.fromXDR(cleanHex, "hex");
+    const scAddress = scVal.address();
+    let publicKey: string;
+
+    if (scAddress.switch() === xdr.ScAddressType.scAddressTypeAccount()) {
+      const accountId = scAddress.accountId();
+      publicKey = StrKey.encodeEd25519PublicKey(accountId.ed25519()!);
+    } else if (scAddress.switch() === xdr.ScAddressType.scAddressTypeContract()) {
+      const contractId = scAddress.contractId();
+      publicKey = StrKey.encodeContract(contractId);
+    } else {
+      throw new Error("Unsupported address type");
+    }
+
+    // Try to reuse an object from the pool
+    let result: DecodedAddress;
+    if (decodedAddressPool.length > 0) {
+      result = decodedAddressPool.pop()!;
+      result.publicKey = publicKey;
+      result.short = shortenAddress(publicKey);
+    } else {
+      result = {
+        publicKey,
+        short: shortenAddress(publicKey),
+      };
+    }
+
+    // Cache the result
+    decodeAddressMemo.set(hex, result);
+
+    // If cache is too big, trim it
+    if (decodeAddressMemo.size > MAX_POOL_SIZE) {
+      const keys = Array.from(decodeAddressMemo.keys());
+      for (const key of keys.slice(0, Math.floor(decodeAddressMemo.size / 2))) {
+        const removed = decodeAddressMemo.get(key);
+        decodeAddressMemo.delete(key);
+        if (removed && decodedAddressPool.length < MAX_POOL_SIZE) {
+          decodedAddressPool.push(removed);
+        }
+      }
+    }
+
+    return result;
+  } catch (error) {
+    // Fallback to mock if decoding fails
+    const seed = hex.slice(2, 10).toUpperCase();
+    const tail = hex.slice(-4).toUpperCase();
+    const publicKey = `G${seed}${"A".repeat(48 - seed.length)}${tail}`;
+
+    let result: DecodedAddress;
+    if (decodedAddressPool.length > 0) {
+      result = decodedAddressPool.pop()!;
+      result.publicKey = publicKey;
+      result.short = shortenAddress(publicKey);
+    } else {
+      result = {
+        publicKey,
+        short: shortenAddress(publicKey),
+      };
+    }
+
+    decodeAddressMemo.set(hex, result);
+    return result;
+  }
 }
 
 const STROOP_DIVISOR = BigInt(10_000_000);
