@@ -312,7 +312,7 @@ export function DashboardClient(): React.JSX.Element {
         ))}
       </section>
 
-      {!isLoading && !error && <StatsBar events={allEvents} />}
+      <StatsBar events={allEvents} />
 
       <section aria-label="Event feed">
         <div className="mb-3 flex items-center justify-between">
