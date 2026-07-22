@@ -1,5 +1,6 @@
 import Redis from "ioredis";
 import type { RawEvent, TranslatedEvent } from "../translator/types";
+import { redisCacheHitsTotal, redisCacheMissesTotal } from "../metrics";
 
 let client: Redis | null = null;
 const CACHE_NAMESPACE = "open-audit";
@@ -83,7 +84,11 @@ export async function getCachedTranslation(
     if (!client) return null;
     const key = makeTranslationKey(event.txHash, event.id);
     const raw = await client.get(key);
-    if (!raw) return null;
+    if (!raw) {
+      redisCacheMissesTotal.inc();
+      return null;
+    }
+    redisCacheHitsTotal.inc();
     return JSON.parse(raw) as TranslatedEvent;
   } catch (err) {
     console.warn("[redis] Error reading translation cache:", err);
